@@ -113,3 +113,6 @@ void OverlayTexture::releaseDevice() {
     if (g_device) { g_device->Release(); g_device = nullptr; }
     g_tried = false;
 }
+
+ID3D11Device* OverlayTexture::sharedDevice() { return device() ? g_device : nullptr; }
+ID3D11DeviceContext* OverlayTexture::sharedContext() { return device() ? g_context : nullptr; }

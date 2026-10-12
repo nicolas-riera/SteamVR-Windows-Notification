@@ -2,6 +2,8 @@
 #include <openvr.h>
 
 struct ID3D11Texture2D;
+struct ID3D11Device;
+struct ID3D11DeviceContext;
 class Canvas;
 
 // Uploads a canvas to an overlay through a D3D11 texture. SetOverlayRaw
@@ -19,6 +21,9 @@ public:
     // Frees the shared D3D11 device (recreated on the next upload). Every
     // OverlayTexture must have been destroyed.
     static void releaseDevice();
+    // The shared device (created on demand; null if D3D11 is unavailable).
+    static ID3D11Device* sharedDevice();
+    static ID3D11DeviceContext* sharedContext();
 
 private:
     bool ensure(int w, int h);

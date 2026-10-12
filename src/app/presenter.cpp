@@ -15,18 +15,21 @@
 
 namespace {
 
-constexpr double kImageWait = 1.5;     // s, max delay of a toast waiting for a remote image
-constexpr double kEnterTime = 0.30;    // s, fade in
-constexpr double kLeaveTime = 0.30;    // s, fade out
-constexpr float kGroupFadeTime = 0.22f;// s, fade when the SteamVR menu hides / shows them
-constexpr float kStackTime = 0.22f;    // s, stack re-layout glide
-constexpr float kStackGap = 0.012f;    // m, between stacked notifications
-constexpr float kDockGap = 0.008f;     // m, between the menu bar and a docked notification
-constexpr float kDockLift = 0.015f;    // m, in front of the menu, so it is never behind it
-constexpr float kDockAngle = 30.0f;    // degrees: docks when you face the menu within this
-constexpr float kUndockAngle = 45.0f;  // and detaches past this
+constexpr double kImageWait = 1.5;      // s, max delay of a toast waiting for a remote image
+constexpr double kEnterTime = 0.30;     // s, fade in
+constexpr double kLeaveTime = 0.30;     // s, fade out
+constexpr float kGroupFadeTime = 0.22f; // s, fade when the SteamVR menu hides / shows them
+constexpr float kStackTime = 0.22f;     // s, stack re-layout glide
+constexpr float kStackGap = 0.012f;     // m, between stacked notifications
+constexpr float kDockGap = 0.03f;       // m, between the menu bar and a docked notification
+constexpr float kDockLift = 0.015f;     // m, in front of the menu, so it is never behind it
+constexpr float kDockAngle = 30.0f;     // degrees: docks when you face the menu within this
+constexpr float kUndockAngle = 45.0f;   // and detaches past this
+constexpr double kMicaInterval = 0.2;   // s, between two looks at the scene behind
+constexpr float kMicaBlend = 0.45f;     // share of a new look in the Mica colors (smooths changes)
+constexpr float kFallbackOpacity = 0.85f; // background without Mica
 constexpr size_t kMaxNormalQueue = 20;
-constexpr double kTrimAfter = 30.0;    // s without notifications before freeing the GPU device
+constexpr double kTrimAfter = 30.0;     // s without notifications before freeing the GPU device
 constexpr int kMaxPriority = 3;
 constexpr double kForever = std::numeric_limits<double>::infinity();
 
@@ -44,14 +47,9 @@ Mat34 toMat(const vr::HmdMatrix34_t& m) {
 }
 
 Vec3 position(const Mat34& m) { return {m.m[0][3], m.m[1][3], m.m[2][3]}; }
+Vec3 axis(const Mat34& m, int i) { return Vec3{m.m[0][i], m.m[1][i], m.m[2][i]}.normalized(); }
 
-// Overlay pose at `p` facing `eye`, kept upright.
-Mat34 facing(const Vec3& p, const Vec3& eye) {
-    Vec3 z = (eye - p).normalized();
-    Vec3 x = Vec3{0, 1, 0}.cross(z);
-    if (x.length() < 1e-3f) x = {1, 0, 0};
-    x = x.normalized();
-    Vec3 y = z.cross(x);
+Mat34 basis(const Vec3& x, const Vec3& y, const Vec3& z, const Vec3& p) {
     Mat34 m;
     m.m[0][0] = x.x; m.m[0][1] = y.x; m.m[0][2] = z.x; m.m[0][3] = p.x;
     m.m[1][0] = x.y; m.m[1][1] = y.y; m.m[1][2] = z.y; m.m[1][3] = p.y;
@@ -68,7 +66,10 @@ Presenter::Presenter(const Settings& settings, FontSet& fonts, WpnStore& store)
     dashboard_ = vr::VROverlay()->IsDashboardVisible();
 }
 
-Presenter::~Presenter() = default;
+Presenter::~Presenter() {
+    entries_.clear();
+    sampler_.release();
+}
 
 // ---------------------------------------------------------------- database
 
@@ -150,13 +151,7 @@ void Presenter::syncDatabase(double now) {
     for (auto& e : entries_) {
         if (e->state == State::Leaving || ids.count(e->toast.id)) continue;
         LOG("toast %lld: removed from Windows", (long long)e->toast.id);
-        if (e->state == State::Showing) {
-            e->state = State::Leaving;
-            e->leaveAt = now;
-        } else {
-            e->state = State::Leaving;
-            e->leaveAt = -kLeaveTime; // never shown: dropped right away
-        }
+        leave(*e, now);
     }
 
     // Progress bars and other {bindings} updated by the app.
@@ -206,32 +201,57 @@ void Presenter::imagesArrived(double /*now*/) {
 
 void Presenter::render(Entry& e) {
     bool light = settings_.theme == "light" || (settings_.theme == "auto" && sys::lightTheme());
-    Theme theme = Theme::make(light, sys::accentColor());
+    e.theme = Theme::make(light, sys::accentColor());
     e.visual.toast = e.toast;
-    renderer_.render(e.visual, theme, settings_.renderScale, settings_.opacity, e.canvas);
+    e.panelH = renderer_.render(e.visual, e.theme, settings_.renderScale, e.canvas);
     if (e.overlay) e.overlay->upload(e.canvas);
-    const float mpp = settings_.width / (ToastRenderer::kWidth * settings_.renderScale);
-    e.heightM = (float(e.canvas.height()) - 2 * ToastRenderer::kShadowPad * settings_.renderScale) * mpp;
+    e.heightM = e.panelH * settings_.width / ToastRenderer::kWidth;
     e.dirty = false;
+    renderBackdrop(e);
+}
+
+// The backdrop is drawn at half the content's resolution: Mica is a blur.
+void Presenter::renderBackdrop(Entry& e) {
+    const MicaField* field = settings_.mica && e.field.valid() ? &e.field : nullptr;
+    renderer_.renderBackdrop(field, e.theme, e.panelH, settings_.renderScale * 0.5f, e.canvas.width() / 2, e.canvas.height() / 2,
+                             kFallbackOpacity, e.backCanvas);
+    if (e.backdrop) e.backdrop->upload(e.backCanvas);
 }
 
 void Presenter::show(Entry& e, double now) {
+    const std::string key = "swn.toast." + std::to_string(++overlayCounter_);
+    e.backdrop = std::make_unique<ToastOverlay>();
+    if (!e.backdrop->create(key + ".backdrop", 199)) e.backdrop.reset();
     e.overlay = std::make_unique<ToastOverlay>();
-    if (!e.overlay->create("swn.toast." + std::to_string(++overlayCounter_))) e.overlay.reset();
+    if (!e.overlay->create(key, 200)) e.overlay.reset();
     render(e);
     e.state = State::Showing;
     e.shownAt = now;
     e.expiresAt = now + duration(e.toast);
+    e.micaDue = 0; // looks at the scene before its first frame
     LOG("toast %lld: shown for %.1f s", (long long)e.toast.id, e.expiresAt - now);
 }
 
+void Presenter::leave(Entry& e, double now) {
+    if (e.state == State::Leaving) return;
+    // Never shown: dropped right away.
+    e.leaveAt = e.state == State::Showing ? now : -kForever;
+    e.state = State::Leaving;
+}
+
 void Presenter::lifecycle(double now) {
+    // On the Desktop tab of the SteamVR menu you see the real banner: what
+    // is shown or waiting counts as seen, and nothing new shows meanwhile.
+    if (dashboard_ && desktopTab_) {
+        for (auto& e : entries_)
+            if (e->state != State::Leaving) {
+                LOG("toast %lld: seen on the desktop", (long long)e->toast.id);
+                leave(*e, now);
+            }
+    }
     int normalShown = 0, priorityShown = 0;
     for (auto& e : entries_) {
-        if (e->state == State::Showing && now >= e->expiresAt) {
-            e->state = State::Leaving;
-            e->leaveAt = now;
-        }
+        if (e->state == State::Showing && now >= e->expiresAt) leave(*e, now);
         if (e->state == State::Waiting && (!e->imagesPending || now - e->arrived > kImageWait)) e->state = State::Queued;
         if (e->state == State::Showing) ++(e->priority ? priorityShown : normalShown);
     }
@@ -258,7 +278,7 @@ void Presenter::lifecycle(double now) {
         if (e->state == State::Showing && e->dirty) render(*e);
 }
 
-// ---------------------------------------------------------------- placement
+// ---------------------------------------------------------------- SteamVR menu
 
 void Presenter::setDashboard(bool open) {
     if (open == dashboard_) return;
@@ -267,35 +287,21 @@ void Presenter::setDashboard(bool open) {
     desktopTab_ = false;
 }
 
-Presenter::Mode Presenter::mode(double now) {
-    if (!dashboard_) return Mode::Follow;
-    if (now >= nextTabPoll_) {
-        // The Desktop tab shows the "system.desktop.N" overlays; they are only
-        // visible while that tab is selected.
-        nextTabPoll_ = now + 0.15;
+void Presenter::pollDesktopTab(double now) {
+    if (!dashboard_) {
         desktopTab_ = false;
-        for (int i = 0; i < 8 && !desktopTab_; ++i) {
-            vr::VROverlayHandle_t h = vr::k_ulOverlayHandleInvalid;
-            std::string key = "system.desktop." + std::to_string(i);
-            if (vr::VROverlay()->FindOverlay(key.c_str(), &h) == vr::VROverlayError_None)
-                desktopTab_ = vr::VROverlay()->IsOverlayVisible(h);
-        }
+        return;
     }
-    return desktopTab_ ? Mode::Hidden : Mode::Dashboard;
-}
-
-bool Presenter::headPose(Mat34& head) {
-    vr::IVRSystem* sys = vr::VRSystem();
-    float sinceVsync = 0;
-    sys->GetTimeSinceLastVsync(&sinceVsync, nullptr);
-    float hz = sys->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float);
-    float toPhotons = sys->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float);
-    float predict = hz > 1 ? std::clamp(1.0f / hz - sinceVsync + toPhotons, 0.0f, 0.05f) : 0.0f;
-    vr::TrackedDevicePose_t pose;
-    sys->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, predict, &pose, 1);
-    if (!pose.bPoseIsValid) return false;
-    head = toMat(pose.mDeviceToAbsoluteTracking);
-    return true;
+    if (now < nextTabPoll_) return;
+    // The Desktop tab shows the "system.desktop.N" overlays; they are only
+    // visible while that tab is selected.
+    nextTabPoll_ = now + 0.15;
+    desktopTab_ = false;
+    for (int i = 0; i < 8 && !desktopTab_; ++i) {
+        vr::VROverlayHandle_t h = vr::k_ulOverlayHandleInvalid;
+        std::string key = "system.desktop." + std::to_string(i);
+        if (vr::VROverlay()->FindOverlay(key.c_str(), &h) == vr::VROverlayError_None) desktopTab_ = vr::VROverlay()->IsOverlayVisible(h);
+    }
 }
 
 // The SteamVR menu's bottom bar (Steam's: clock, battery...): its width
@@ -331,8 +337,49 @@ bool Presenter::barTopRight(double now, Mat34& corner) {
     return position(corner).length() > 1e-4f;
 }
 
+// ---------------------------------------------------------------- placement
+
+bool Presenter::headPose(Mat34& head) {
+    vr::IVRSystem* sys = vr::VRSystem();
+    float sinceVsync = 0;
+    sys->GetTimeSinceLastVsync(&sinceVsync, nullptr);
+    float hz = sys->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float);
+    float toPhotons = sys->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float);
+    float predict = hz > 1 ? std::clamp(1.0f / hz - sinceVsync + toPhotons, 0.0f, 0.05f) : 0.0f;
+    vr::TrackedDevicePose_t pose;
+    sys->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, predict, &pose, 1);
+    if (!pose.bPoseIsValid) return false;
+    head = toMat(pose.mDeviceToAbsoluteTracking);
+    return true;
+}
+
+// Mica: a look at the scene around the notification, blended into its
+// colors so they change smoothly.
+void Presenter::updateMica(Entry& e, const Mat34& pose, const Mat34& head, double now) {
+    if (!settings_.mica || now < e.micaDue) return;
+    e.micaDue = now + kMicaInterval;
+    const Vec3 c = position(pose), right = axis(pose, 0), up = axis(pose, 1);
+    const float hw = settings_.width * 0.5f, hh = e.heightM * 0.5f;
+    const Vec3 corners[4] = {c - right * hw + up * hh, c + right * hw + up * hh, c + right * hw - up * hh, c - right * hw - up * hh};
+    MicaField f;
+    if (!sampler_.sample(corners, head, f)) return;
+    if (!e.field.valid() || e.field.rgb.size() != f.rgb.size()) {
+        e.field = std::move(f);
+        renderBackdrop(e);
+        return;
+    }
+    float change = 0;
+    for (size_t i = 0; i < f.rgb.size(); ++i) {
+        float v = e.field.rgb[i] + (f.rgb[i] - e.field.rgb[i]) * kMicaBlend;
+        change = std::max(change, std::fabs(v - e.field.rgb[i]));
+        e.field.rgb[i] = v;
+    }
+    e.field.px0 = f.px0; e.field.px1 = f.px1; e.field.py0 = f.py0; e.field.py1 = f.py1;
+    if (change > 1.5f / 255.0f) renderBackdrop(e);
+}
+
 void Presenter::place(double now, float dt) {
-    Mode m = mode(now);
+    const Mode m = !dashboard_ ? Mode::Follow : desktopTab_ ? Mode::Hidden : Mode::Dashboard;
     Mat34 head;
     if (!headPose(head)) return;
     const Vec3 eye = position(head);
@@ -355,9 +402,8 @@ void Presenter::place(double now, float dt) {
     Mat34 corner;
     if (m == Mode::Dashboard && barTopRight(now, corner)) {
         const Vec3 cornerPos = position(corner);
-        Vec3 right = Vec3{corner.m[0][0], corner.m[1][0], corner.m[2][0]}.normalized();
-        Vec3 up = Vec3{corner.m[0][1], corner.m[1][1], corner.m[2][1]}.normalized();
-        Vec3 normal = Vec3{corner.m[0][2], corner.m[1][2], corner.m[2][2]}.normalized();
+        Vec3 right = axis(corner, 0), up = axis(corner, 1), normal = axis(corner, 2);
+        if ((eye - cornerPos).dot(normal) < 0) { normal = normal * -1; right = right * -1; } // face the viewer
         float h = newest ? newest->heightM : 0.1f;
         Vec3 dock = cornerPos + up * (kDockGap + h * 0.5f) - right * (settings_.width * 0.5f) + normal * kDockLift;
         // Detaches when you look away from the menu, docks again when you face it.
@@ -369,6 +415,10 @@ void Presenter::place(double now, float dt) {
         if (docked_) {
             target = dock;
             docked = true;
+            barX_ = right;
+            barY_ = up;
+            barZ_ = normal;
+            haveBar_ = true;
         }
     } else {
         docked_ = true; // docks right away the next time the menu opens
@@ -389,6 +439,8 @@ void Presenter::place(double now, float dt) {
         placed_ = true;
         chasing_ = false;
         yawVel_ = pitchVel_ = distVel_ = 0;
+        dockBlend_ = docked ? 1.0f : 0.0f;
+        dockBlendVel_ = 0;
     } else {
         // Spherical coordinates around the eyes, so a glide arcs around you
         // instead of cutting through your head.
@@ -415,7 +467,21 @@ void Presenter::place(double now, float dt) {
                 if (docked) pos_ = target;
             }
         }
+        dockBlend_ = smoothDamp(dockBlend_, docked ? 1.0f : 0.0f, dockBlendVel_, settings_.followTime, dt);
     }
+
+    // Orientation: facing you while following; docked, the menu's own
+    // orientation (no turning with your head). Blended while switching.
+    const float k = haveBar_ ? std::clamp(dockBlend_, 0.0f, 1.0f) : 0.0f;
+    Vec3 z = (eye - pos_).normalized(), upRef{0, 1, 0};
+    if (k > 0) {
+        z = (z * (1 - k) + barZ_ * k).normalized();
+        upRef = (upRef * (1 - k) + barY_ * k).normalized();
+    }
+    Vec3 x = upRef.cross(z);
+    x = x.length() < 1e-3f ? Vec3{1, 0, 0} : x.normalized();
+    const Mat34 group = basis(x, z.cross(x), z, pos_);
+    const Vec3 up = axis(group, 1);
 
     // Stack: newest at the bottom (on the anchor), older ones above.
     std::vector<Entry*> stack;
@@ -434,11 +500,9 @@ void Presenter::place(double now, float dt) {
     }
 
     // Overlay poses: notifications appear and disappear in place, fading.
-    const Mat34 group = facing(pos_, eye);
-    const Vec3 up{group.m[0][1], group.m[1][1], group.m[2][1]};
-    const float mpp = settings_.width / (ToastRenderer::kWidth * settings_.renderScale);
+    const float widthScale = settings_.width / (ToastRenderer::kWidth * settings_.renderScale); // m per content pixel
     const float ga = easeInOutCubic(std::clamp(groupAlpha_, 0.0f, 1.0f));
-    bool animating = moving || chasing_ || groupAlpha_ != wantAlpha;
+    bool animating = moving || chasing_ || groupAlpha_ != wantAlpha || std::fabs(dockBlend_ - (docked ? 1.0f : 0.0f)) > 1e-3f;
     for (auto& e : entries_) {
         if (!e->overlay || (e->state != State::Showing && e->state != State::Leaving)) continue;
         float alpha = easeInOutCubic(std::clamp(float((now - e->shownAt) / kEnterTime), 0.0f, 1.0f));
@@ -447,7 +511,10 @@ void Presenter::place(double now, float dt) {
         Vec3 p = pos_ + up * e->y;
         Mat34 pose = group;
         pose.m[0][3] = p.x; pose.m[1][3] = p.y; pose.m[2][3] = p.z;
-        e->overlay->place(pose, float(e->canvas.width()) * mpp, alpha * ga);
+        if (alpha * ga > 0.004f) updateMica(*e, pose, head, now);
+        const float widthM = float(e->canvas.width()) * widthScale;
+        e->overlay->place(pose, widthM, alpha * ga);
+        if (e->backdrop) e->backdrop->place(pose, widthM, alpha * ga);
     }
     pace_ = animating ? Pace::Frame : Pace::Watch;
 }
@@ -455,6 +522,7 @@ void Presenter::place(double now, float dt) {
 void Presenter::tick(double now) {
     float dt = lastTick_ > 0 ? float(std::clamp(now - lastTick_, 0.0, 0.1)) : 0.0f;
     lastTick_ = now;
+    pollDesktopTab(now);
     lifecycle(now);
     bool any = false;
     for (auto& e : entries_) any |= e->state == State::Showing || e->state == State::Leaving;
@@ -468,6 +536,7 @@ void Presenter::tick(double now) {
         if (idleSince_ < 0) idleSince_ = now;
         if (!trimmed_ && entries_.empty() && now - idleSince_ > kTrimAfter) {
             // Long idle: give back the GPU device and the memory pages.
+            sampler_.release();
             OverlayTexture::releaseDevice();
             SetProcessWorkingSetSize(GetCurrentProcess(), SIZE_T(-1), SIZE_T(-1));
             trimmed_ = true;

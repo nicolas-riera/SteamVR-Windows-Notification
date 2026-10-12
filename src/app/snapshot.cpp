@@ -134,12 +134,31 @@ int runSnapshot(const std::wstring& outDir) {
         samples.push_back({"long", v});
     }
 
+    // A red scene behind, brighter on the left (like a red wallpaper).
+    MicaField field;
+    field.cols = 10;
+    field.rows = 6;
+    for (int r = 0; r < field.rows; ++r)
+        for (int c = 0; c < field.cols; ++c) {
+            float t = float(c) / (field.cols - 1);
+            field.rgb.insert(field.rgb.end(), {0.75f - 0.35f * t, 0.10f + 0.05f * r / 5.0f, 0.12f});
+        }
+    field.px0 = 2; field.px1 = 8; field.py0 = 1.5f; field.py1 = 4.5f;
+
     uint32_t accent = sys::accentColor();
     for (auto& [name, v] : samples)
         for (bool light : {false, true}) {
-            Canvas c;
-            renderer.render(v, Theme::make(light, accent), s, 0.8f, c);
-            writePng(c, outDir + L"\\" + util::fromUtf8(name) + (light ? L"_light.png" : L"_dark.png"));
+            Theme th = Theme::make(light, accent);
+            Canvas content, out;
+            float h = renderer.render(v, th, s, content);
+            // Backdrop at full size here, then the content over it.
+            renderer.renderBackdrop(&field, th, h, s, content.width(), content.height(), 0.85f, out);
+            for (int y = 0; y < content.height(); ++y)
+                for (int x = 0; x < content.width(); ++x) {
+                    const uint8_t* p = content.data() + (size_t(y) * content.width() + x) * 4;
+                    if (p[3]) out.blend(x, y, Color{p[0], p[1], p[2], p[3]}, 1.0f);
+                }
+            writePng(out, outDir + L"\\" + util::fromUtf8(name) + (light ? L"_light.png" : L"_dark.png"));
         }
     renderIcon(fonts, outDir + L"\\icon.png");
     CoUninitialize();

@@ -25,6 +25,19 @@ Color rgba(uint32_t rgb, uint8_t a = 255) { return Color{uint8_t(rgb >> 16), uin
 
 bool isSpace(char c) { return c == ' ' || c == '\t'; }
 
+constexpr float kBayer[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+
+float lum(float r, float g, float b) { return 0.30f * r + 0.59f * g + 0.11f * b; }
+
+// W3C "luminosity" blend: the backdrop's hue and saturation with luminosity `l`.
+void setLum(float& r, float& g, float& b, float l) {
+    float d = l - lum(r, g, b);
+    r += d; g += d; b += d;
+    float L = lum(r, g, b), n = std::min({r, g, b}), x = std::max({r, g, b});
+    if (n < 0) { float k = L / std::max(L - n, 1e-4f); r = L + (r - L) * k; g = L + (g - L) * k; b = L + (b - L) * k; }
+    if (x > 1) { float k = (1 - L) / std::max(x - L, 1e-4f); r = L + (r - L) * k; g = L + (g - L) * k; b = L + (b - L) * k; }
+}
+
 // Greedy word wrap; words wider than the line are split between characters
 // (scripts without spaces). The last allowed line is ellipsized.
 std::vector<std::string> wrap(FontSet& f, const std::string& text, float px, FontStyle st, float maxW, int maxLines) {
@@ -89,6 +102,7 @@ Theme Theme::make(bool light, uint32_t accentRgb) {
     Color accent = rgba(accentRgb);
     if (light) {
         t.tint = rgb(243, 243, 243); // Mica light
+        t.tintOpacity = 0.5f;
         t.text = rgb(0, 0, 0, 228);
         t.text2 = rgb(0, 0, 0, 155);
         t.stroke = rgb(0, 0, 0, 26);
@@ -97,7 +111,8 @@ Theme Theme::make(bool light, uint32_t accentRgb) {
         t.accent = mix(accent, rgb(0, 0, 0), 0.2f);
         t.track = rgb(0, 0, 0, 60);
     } else {
-        t.tint = rgb(32, 32, 32); // Mica dark
+        t.tint = rgb(40, 40, 40); // Mica dark (as Windows' notifications)
+        t.tintOpacity = 0.8f;
         t.text = rgb(255, 255, 255);
         t.text2 = rgb(255, 255, 255, 200);
         t.stroke = rgb(255, 255, 255, 22);
@@ -242,23 +257,68 @@ float ToastRenderer::layout(const ToastVisual& v, Canvas* c, const Theme& th, fl
     return y + kPad;
 }
 
-void ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, float opacity, Canvas& out) {
+float ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, Canvas& out) {
     const float pad = kShadowPad * s;
     const float h = layout(v, nullptr, th, s, 0, 0);
-    const int cw = int(std::ceil(kWidth * s + 2 * pad)), ch = int(std::ceil(h * s + 2 * pad));
-    out.resize(cw, ch);
+    // Even sizes: the backdrop is exactly half as large.
+    auto even = [](float x) { int n = int(std::ceil(x)); return n + (n & 1); };
+    out.resize(even(kWidth * s + 2 * pad), even(h * s + 2 * pad));
     out.clear();
     Rect panel{pad, pad, kWidth * s, h * s};
+    out.strokeRoundRect(panel, kRadius * s, std::max(1.0f, s), th.stroke);
+    layout(v, &out, th, s, panel.x, panel.y);
+    return h;
+}
+
+void ToastRenderer::renderBackdrop(const MicaField* field, const Theme& th, float panelH, float s, int w, int h, float fallbackOpacity,
+                                   Canvas& out) {
+    out.resize(w, h);
+    out.clear();
+    const float pad = kShadowPad * s;
+    Rect panel{pad, pad, kWidth * s, panelH * s};
     const float radius = kRadius * s;
 
     // Soft shadow, slightly lower than the panel (light from above).
     Rect shadow = panel;
     shadow.y += 4 * s;
     out.drawShadow(shadow, radius, 16 * s, rgb(0, 0, 0, th.light ? 50 : 90));
-    out.eraseRoundRect(panel, radius); // the panel is translucent: no shadow under it
+    out.eraseRoundRect(panel, radius);
 
-    // Mica: the Windows 11 tint at its tint opacity over what is behind.
-    out.fillRoundRect(panel, radius, withAlpha(th.tint, uint8_t(std::lround(opacity * 255))));
-    out.strokeRoundRect(panel, radius, std::max(1.0f, s), th.stroke);
-    layout(v, &out, th, s, panel.x, panel.y);
+    if (!field || !field->valid()) {
+        // No view of the scene: plain translucent tint.
+        out.fillRoundRect(panel, radius, withAlpha(th.tint, uint8_t(std::lround(fallbackOpacity * 255))));
+        return;
+    }
+    // Mica: the (very blurred) backdrop gets the tint's luminosity, then the
+    // tint on top at its opacity. Like Windows, opaque: only colors show.
+    Image mica;
+    mica.w = int(std::ceil(panel.w));
+    mica.h = int(std::ceil(panel.h));
+    mica.px.resize(size_t(mica.w) * mica.h * 4);
+    const float tr = th.tint.r / 255.0f, tg = th.tint.g / 255.0f, tb = th.tint.b / 255.0f, tl = lum(tr, tg, tb);
+    const MicaField& f = *field;
+    for (int y = 0; y < mica.h; ++y) {
+        float gy = std::clamp(f.py0 + (y + 0.5f) / mica.h * (f.py1 - f.py0) - 0.5f, 0.0f, float(f.rows - 1));
+        int iy = std::min(int(gy), f.rows - 1), iy1 = std::min(iy + 1, f.rows - 1);
+        float ty = gy - iy;
+        for (int x = 0; x < mica.w; ++x) {
+            float gx = std::clamp(f.px0 + (x + 0.5f) / mica.w * (f.px1 - f.px0) - 0.5f, 0.0f, float(f.cols - 1));
+            int ix = std::min(int(gx), f.cols - 1), ix1 = std::min(ix + 1, f.cols - 1);
+            float tx = gx - ix;
+            float c[3];
+            for (int k = 0; k < 3; ++k) {
+                auto at = [&](int cx, int cy) { return f.rgb[(size_t(cy) * f.cols + cx) * 3 + k]; };
+                c[k] = (at(ix, iy) * (1 - tx) + at(ix1, iy) * tx) * (1 - ty) + (at(ix, iy1) * (1 - tx) + at(ix1, iy1) * tx) * ty;
+            }
+            setLum(c[0], c[1], c[2], tl);
+            uint8_t* p = &mica.px[(size_t(y) * mica.w + x) * 4];
+            // Ordered dither: the smooth gradients would band in 8 bits.
+            const float dither = kBayer[(y & 3) * 4 + (x & 3)] / 16.0f;
+            p[0] = uint8_t(std::min(255.0f, std::clamp(c[0] + (tr - c[0]) * th.tintOpacity, 0.0f, 1.0f) * 255.0f + dither));
+            p[1] = uint8_t(std::min(255.0f, std::clamp(c[1] + (tg - c[1]) * th.tintOpacity, 0.0f, 1.0f) * 255.0f + dither));
+            p[2] = uint8_t(std::min(255.0f, std::clamp(c[2] + (tb - c[2]) * th.tintOpacity, 0.0f, 1.0f) * 255.0f + dither));
+            p[3] = 255;
+        }
+    }
+    out.drawImage(mica, panel, radius);
 }

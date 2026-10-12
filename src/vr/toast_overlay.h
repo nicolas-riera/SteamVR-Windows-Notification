@@ -17,7 +17,8 @@ public:
     ToastOverlay(const ToastOverlay&) = delete;
     ToastOverlay& operator=(const ToastOverlay&) = delete;
 
-    bool create(const std::string& key);
+    // Higher sort orders are drawn on top (content above its backdrop).
+    bool create(const std::string& key, uint32_t sortOrder);
     void upload(const Canvas& c);
     // Absolute (standing) pose of the overlay center; hidden when alpha ~ 0.
     void place(const Mat34& pose, float widthMeters, float alpha);

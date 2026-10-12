@@ -10,7 +10,7 @@ ToastOverlay::~ToastOverlay() {
     if (handle_ != vr::k_ulOverlayHandleInvalid && vr::VROverlay()) vr::VROverlay()->DestroyOverlay(handle_);
 }
 
-bool ToastOverlay::create(const std::string& key) {
+bool ToastOverlay::create(const std::string& key, uint32_t sortOrder) {
     vr::IVROverlay* ov = vr::VROverlay();
     vr::EVROverlayError e = ov->CreateOverlay(key.c_str(), "Windows notification", &handle_);
     if (e != vr::VROverlayError_None) {
@@ -21,9 +21,8 @@ bool ToastOverlay::create(const std::string& key) {
     ov->SetOverlayInputMethod(handle_, vr::VROverlayInputMethod_None);
     // Above other overlays, and still drawn while the SteamVR menu is open
     // (we decide ourselves when to hide it).
-    ov->SetOverlaySortOrder(handle_, 200);
+    ov->SetOverlaySortOrder(handle_, sortOrder);
     ov->SetOverlayFlag(handle_, vr::VROverlayFlags_VisibleInDashboard, true);
-    ov->SetOverlayFlag(handle_, vr::VROverlayFlags_NoBackside, false);
     return true;
 }
 
