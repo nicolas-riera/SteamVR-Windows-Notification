@@ -93,7 +93,7 @@ int runOverlay() {
     }
     WpnStore store;
     store.open();
-    Presenter presenter(settings, fonts, store);
+    Presenter presenter(settings, fonts, store, util::toUtf8(dir + L"\\actions.json"));
     LOG("running");
 
     double nextDbCheck = 0, nextOpenTry = util::now() + 5.0;

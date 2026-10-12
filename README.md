@@ -2,7 +2,7 @@
 
 Shows Windows notifications in VR, the way Windows Mixed Reality did. Each banner Windows shows on the desktop floats in front of you, slightly below your gaze, with the Windows 11 look: app icon and name, photo, title, text, hero image, progress bars and buttons, on a Mica background.
 
-There is no window, no tray icon, no dashboard tab, and nothing to interact with: controllers and lasers pass through the notifications.
+There is no window, no tray icon and no dashboard tab. The game keeps its controllers: the notifications only notice a click aimed at them.
 
 ## Install
 
@@ -21,7 +21,7 @@ To remove the SteamVR registration, run `SteamVrWindowsNotification.exe --unregi
 - One normal banner at a time; the others queue. Reminders, alarms and calls can show up to three at once, on top.
 - A banner lasts as long as Windows' *Dismiss notifications after* setting, plus about a second. Toasts sent with `duration="long"` last 25 s.
 - Do Not Disturb and each app's *Show notification banners* setting are respected.
-- A notification removed from Windows (from the notification center, or hidden by its app) disappears from VR. A notification that merely expired keeps its banner, as on the desktop.
+- A notification removed from Windows (from the notification center, or hidden by its app, as Discord does with its bursts) disappears from VR at once, and the next one takes its place. A notification that merely expired keeps its banner, as on the desktop.
 - Progress bars update live.
 
 **Placement.** The notification floats below your gaze and stays still while you look around within a small cone. It then glides back in front of you, easing in and out. It appears and disappears with a fade, in place.
@@ -31,6 +31,8 @@ To remove the SteamVR registration, run `SteamVrWindowsNotification.exe --unregi
 - On the *Desktop* tab, you see the real banner, so the notification counts as seen and closes in VR.
 - On any other tab, it docks just above the right end of the menu's bottom bar, with the menu's orientation, leaning slightly back so it never cuts into the menu window.
 - Looking away from the menu detaches it, and it comes back in front of you.
+
+**Clicking.** Point a controller at a notification and pull the trigger: a strip slides down from under it, saying to open the Desktop view to act on it ("Open the Desktop view to interact with the notification", or in French). The notification stays up a few more seconds, as hovering a banner does on Windows.
 
 **Mica.**
 
@@ -54,7 +56,7 @@ Reminders, alarms and calls stay on Windows until you act. In VR they last the l
 | `deadzoneYaw` / `deadzonePitch` | 12 / 9 | degrees you can look around before it follows |
 | `followTime` | 0.3 | seconds, smoothing of the glide |
 | `theme` | `auto` | `auto` (Windows), `dark` or `light` |
-| `language` | `auto` | hint text: `auto` (Windows), `en` or `fr` |
+| `language` | `auto` | text of the click hint: `auto` (Windows), `en` or `fr` |
 | `mica` | true | Mica background; `false` for a plain translucent one |
 | `renderScale` | 2 | texture pixels per Windows pixel |
 | `respectDoNotDisturb` | true | follow Windows' Do Not Disturb |
@@ -88,7 +90,7 @@ The CRT is linked statically, so no redistributable is needed. SQLite is the cop
 | `src/notify` | Windows notification database (`wpndatabase.db`, read-only), toast XML, app names and icons, image URIs, Do Not Disturb, theme |
 | `src/gfx` | CPU rasterizer, text (stb_truetype on the memory-mapped system fonts), WIC images |
 | `src/render` | Windows 11 toast layout and Mica |
-| `src/vr` | overlays, D3D11 upload, mirror texture sampling |
+| `src/vr` | overlays, D3D11 upload, mirror texture sampling, SteamVR Input (click) |
 | `src/app` | main loop, presenter (queue, timing, placement, SteamVR menu), registration, snapshot |
 
 **Lightweight by design:**

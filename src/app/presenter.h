@@ -25,6 +25,7 @@
 #include "render/toast_renderer.h"
 #include "vr/mirror_sampler.h"
 #include "vr/toast_overlay.h"
+#include "vr/vr_input.h"
 
 struct Settings;
 class FontSet;
@@ -32,7 +33,7 @@ class WpnStore;
 
 class Presenter {
 public:
-    Presenter(const Settings& settings, FontSet& fonts, WpnStore& store);
+    Presenter(const Settings& settings, FontSet& fonts, WpnStore& store, const std::string& actionManifest);
     ~Presenter();
 
     // After the notification database changed.
@@ -61,6 +62,10 @@ private:
         double arrived = 0, shownAt = 0, expiresAt = 0, leaveAt = 0;
         std::unique_ptr<ToastOverlay> overlay;  // content
         std::unique_ptr<ToastOverlay> backdrop; // Mica + shadow, underneath
+        std::unique_ptr<ToastOverlay> footer;   // "open the Desktop view" strip, under it once clicked
+        Canvas footCanvas;
+        float footT = 0;        // footer reveal, 0..1 (linear)
+        double footUntil = 0;   // shown until
         Canvas canvas, backCanvas;
         Theme theme;
         MicaField field;
@@ -77,7 +82,8 @@ private:
     void loadImages(Entry& e);
     bool loadImage(const ToastImage& img, const std::string& aumid, int maxW, int maxH, Image& out);
     void show(Entry& e, double now);
-    void leave(Entry& e, double now);
+    // instant: gone at once (removed from Windows), else faded out.
+    void leave(Entry& e, double now, bool instant = false);
     void render(Entry& e);
     void renderBackdrop(Entry& e);
     std::string footerText() const;
@@ -95,6 +101,8 @@ private:
     Downloader downloader_;
     ToastRenderer renderer_;
     MirrorSampler sampler_;
+    VrInput input_;
+    float footerHm_ = 0; // footer height (m)
     std::vector<std::unique_ptr<Entry>> entries_;
     int overlayCounter_ = 0;
     Pace pace_ = Pace::Idle;

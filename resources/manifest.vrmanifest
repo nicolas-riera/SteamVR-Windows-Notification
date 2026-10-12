@@ -6,6 +6,7 @@
       "launch_type": "binary",
       "binary_path_windows": "SteamVrWindowsNotification.exe",
       "is_dashboard_overlay": true,
+      "action_manifest_path": "actions.json",
       "image_path": "icon.png",
       "strings": {
         "en_us": { "name": "SteamVR Windows Notification", "description": "Shows Windows notifications in VR" },

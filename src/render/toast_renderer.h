@@ -18,7 +18,6 @@ struct ToastVisual {
     Toast toast;
     std::string appName;
     Image appIcon, logo, hero, inlineImage; // already decoded (may be empty)
-    std::string footer;                     // hint shown under the content ("" = none)
 };
 
 struct Theme {
@@ -33,6 +32,7 @@ public:
     // Windows layout units (1 unit = 1 px at 100% scaling).
     static constexpr float kWidth = 364.0f;
     static constexpr float kShadowPad = 20.0f; // transparent margin for the shadow
+    static constexpr float kFooterH = 34.0f;   // hint strip under a clicked notification
     // Pixel sizes images should be decoded at, for a given render scale.
     static int logoPx(float scale) { return int(48 * scale); }
     static int heroMaxPx(float scale) { return int((kWidth - 32) * scale); }
@@ -46,6 +46,10 @@ public:
     // content). Without a field: the tint at `fallbackOpacity`.
     void renderBackdrop(const MicaField* field, const Theme& theme, float panelH, float scale, int w, int h, float fallbackOpacity,
                         Canvas& out);
+    // The hint strip shown under a notification when you click it (its
+    // canvas has the same width as the content). Returns its height (units).
+    float renderFooter(const std::string& text, const MicaField* field, const Theme& theme, float scale, float fallbackOpacity,
+                       Canvas& out);
 
 private:
     float layout(const ToastVisual& v, Canvas* c, const Theme& th, float s, float originX, float originY);

@@ -254,18 +254,7 @@ float ToastRenderer::layout(const ToastVisual& v, Canvas* c, const Theme& th, fl
         }
         y += kControlH;
     }
-    if (v.footer.empty()) return y + kPad;
-
-    // Footer, as on Windows Mixed Reality: where to go to act on it.
-    y += kPad;
-    if (c) c->fillRect({X(0), Y(y), W * s, std::max(1.0f, s)}, withAlpha(th.text, 28));
-    y += 1;
-    const float rowH = 34;
-    if (c) {
-        f.drawIcon(*c, X(kPad + 7), Y(y + rowH * 0.5f), 0xE7F4, 12 * s, th.text2); // monitor
-        text(kPad + 22, y, rowH, f.ellipsize(v.footer, kSmallPx * s, (W - kPad * 2 - 22) * s), kSmallPx, th.text2, FontStyle::Regular);
-    }
-    return y + rowH;
+    return y + kPad;
 }
 
 float ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, Canvas& out) {
@@ -332,4 +321,44 @@ void ToastRenderer::renderBackdrop(const MicaField* field, const Theme& th, floa
         }
     }
     out.drawImage(mica, panel, radius);
+}
+
+// The Mica color at (u, v) of the panel (0..1 each), as the backdrop draws it.
+static Color micaAt(const MicaField& f, const Theme& th, float u, float v) {
+    float gx = std::clamp(f.px0 + u * (f.px1 - f.px0) - 0.5f, 0.0f, float(f.cols - 1));
+    float gy = std::clamp(f.py0 + v * (f.py1 - f.py0) - 0.5f, 0.0f, float(f.rows - 1));
+    int ix = std::min(int(gx), f.cols - 1), ix1 = std::min(ix + 1, f.cols - 1);
+    int iy = std::min(int(gy), f.rows - 1), iy1 = std::min(iy + 1, f.rows - 1);
+    float tx = gx - ix, ty = gy - iy, c[3];
+    for (int k = 0; k < 3; ++k) {
+        auto at = [&](int cx, int cy) { return f.rgb[(size_t(cy) * f.cols + cx) * 3 + k]; };
+        c[k] = (at(ix, iy) * (1 - tx) + at(ix1, iy) * tx) * (1 - ty) + (at(ix, iy1) * (1 - tx) + at(ix1, iy1) * tx) * ty;
+    }
+    const float tr = th.tint.r / 255.0f, tg = th.tint.g / 255.0f, tb = th.tint.b / 255.0f;
+    setLum(c[0], c[1], c[2], lum(tr, tg, tb));
+    auto ch = [&](float x, float t) { return uint8_t(std::clamp(x + (t - x) * th.tintOpacity, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    return Color{ch(c[0], tr), ch(c[1], tg), ch(c[2], tb), 255};
+}
+
+float ToastRenderer::renderFooter(const std::string& text, const MicaField* field, const Theme& th, float s, float fallbackOpacity,
+                                  Canvas& out) {
+    FontSet& f = fonts_;
+    const float pad = kShadowPad * s, h = kFooterH;
+    auto even = [](float x) { int n = int(std::ceil(x)); return n + (n & 1); };
+    out.resize(even(kWidth * s + 2 * pad), even(h * s + 2 * pad));
+    out.clear();
+    Rect panel{pad, pad, kWidth * s, h * s};
+    const float radius = kRadius * s;
+    Rect shadow = panel;
+    shadow.y += 3 * s;
+    out.drawShadow(shadow, radius, 12 * s, rgb(0, 0, 0, th.light ? 40 : 70));
+    out.eraseRoundRect(panel, radius);
+    // One color: the Mica of the notification's bottom edge, which it comes out of.
+    Color bg = field && field->valid() ? micaAt(*field, th, 0.5f, 1.0f) : withAlpha(th.tint, uint8_t(std::lround(fallbackOpacity * 255)));
+    out.fillRoundRect(panel, radius, bg);
+    out.strokeRoundRect(panel, radius, std::max(1.0f, s), th.stroke);
+    f.drawIcon(out, panel.x + (kPad + 7) * s, panel.cy(), 0xE7F4, 12 * s, th.text2); // monitor
+    std::string line = f.ellipsize(text, kSmallPx * s, (kWidth - kPad * 2 - 22) * s);
+    f.draw(out, panel.x + (kPad + 22) * s, panel.cy() + f.capCenterOffset(kSmallPx * s), line, kSmallPx * s, th.text2);
+    return h;
 }

@@ -1,0 +1,31 @@
+{
+  "default_bindings": [
+    { "controller_type": "oculus_touch", "binding_url": "bindings_oculus_touch.json" },
+    { "controller_type": "rift", "binding_url": "bindings_rift.json" },
+    { "controller_type": "knuckles", "binding_url": "bindings_knuckles.json" },
+    { "controller_type": "vive_controller", "binding_url": "bindings_vive_controller.json" },
+    { "controller_type": "holographic_controller", "binding_url": "bindings_holographic_controller.json" },
+    { "controller_type": "generic", "binding_url": "bindings_generic.json" }
+  ],
+  "actions": [
+    { "name": "/actions/swn/in/activate", "type": "boolean", "requirement": "optional" },
+    { "name": "/actions/swn/in/pointer", "type": "pose", "requirement": "optional" }
+  ],
+  "action_sets": [
+    { "name": "/actions/swn", "usage": "leftright" }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US",
+      "/actions/swn": "SteamVR Windows Notification",
+      "/actions/swn/in/activate": "Click a notification (shows how to interact with it)",
+      "/actions/swn/in/pointer": "Pointer pose"
+    },
+    {
+      "language_tag": "fr_FR",
+      "/actions/swn": "SteamVR Windows Notification",
+      "/actions/swn/in/activate": "Cliquer sur une notification (indique comment interagir avec)",
+      "/actions/swn/in/pointer": "Pose du pointeur"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "action_manifest_version": 0,
+  "bindings": {
+    "/actions/swn": {
+      "sources": [
+        { "path": "/user/hand/left/input/trigger", "mode": "trigger", "inputs": { "click": { "output": "/actions/swn/in/activate" } } },
+        { "path": "/user/hand/right/input/trigger", "mode": "trigger", "inputs": { "click": { "output": "/actions/swn/in/activate" } } }
+      ],
+      "poses": [
+        { "path": "/user/hand/left/pose/tip", "output": "/actions/swn/in/pointer" },
+        { "path": "/user/hand/right/pose/tip", "output": "/actions/swn/in/pointer" }
+      ]
+    }
+  },
+  "controller_type": "holographic_controller",
+  "description": "SteamVR Windows Notification default bindings",
+  "name": "SteamVR Windows Notification - holographic_controller"
+}

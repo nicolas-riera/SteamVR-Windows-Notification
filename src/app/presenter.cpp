@@ -29,7 +29,9 @@ constexpr float kUndockAngle = 45.0f;   // and detaches past this
 constexpr double kMicaInterval = 0.2;   // s, between two looks at the scene behind
 constexpr float kMicaBlend = 0.45f;     // share of a new look in the Mica colors (smooths changes)
 constexpr float kFallbackOpacity = 0.85f; // background without Mica
-constexpr double kMinShown = 1.2;      // s, least time a notification hidden by its app stays up (as on Windows)
+constexpr float kFooterTime = 0.28f;    // s, footer slide
+constexpr double kFooterShown = 5.0;   // s, footer (and notification) kept after a click
+constexpr float kFooterGap = 0.006f;   // m, between a notification and its footer
 constexpr int64_t kExpirySlack = 20000000; // 2 s in FILETIME units: removed this close to its expiry = expired
 constexpr double kBannerExtra = 1.0;   // s, Windows keeps a banner ~1 s longer than its setting (measured)
 constexpr size_t kMaxNormalQueue = 20;
@@ -65,9 +67,10 @@ bool isPriority(Scenario s) { return s != Scenario::Default; }
 
 } // namespace
 
-Presenter::Presenter(const Settings& settings, FontSet& fonts, WpnStore& store)
+Presenter::Presenter(const Settings& settings, FontSet& fonts, WpnStore& store, const std::string& actionManifest)
     : settings_(settings), fonts_(fonts), store_(store), renderer_(fonts) {
     dashboard_ = vr::VROverlay()->IsDashboardVisible();
+    if (!input_.init(actionManifest)) LOG("input: unavailable, notifications cannot be clicked");
 }
 
 Presenter::~Presenter() {
@@ -154,7 +157,7 @@ void Presenter::syncDatabase(double now) {
     // Gone from the database. Measured on the desktop:
     //  - expired: Windows still shows its banner (even when it was queued);
     //  - removed (by you, or hidden by its app): a queued banner is skipped,
-    //    a shown one leaves, but only after being up for a moment.
+    //    a shown one disappears at once and the next one takes its place.
     std::set<int64_t> ids = store_.toastIds();
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
@@ -167,8 +170,7 @@ void Presenter::syncDatabase(double now) {
             continue;
         }
         LOG("toast %lld: removed from Windows", (long long)e->toast.id);
-        if (e->state == State::Showing) e->expiresAt = std::min(e->expiresAt, std::max(now, e->shownAt + kMinShown));
-        else leave(*e, now);
+        leave(*e, now, true); // as on Windows: gone at once, the next one shows
     }
 
     // Progress bars and other {bindings} updated by the app.
@@ -221,7 +223,6 @@ void Presenter::render(Entry& e) {
     bool light = settings_.theme == "light" || (settings_.theme == "auto" && sys::lightTheme());
     e.theme = Theme::make(light, sys::accentColor());
     e.visual.toast = e.toast;
-    e.visual.footer = footerText();
     e.panelH = renderer_.render(e.visual, e.theme, settings_.renderScale, e.canvas);
     if (e.overlay) e.overlay->upload(e.canvas);
     e.heightM = e.panelH * settings_.width / ToastRenderer::kWidth;
@@ -251,10 +252,10 @@ void Presenter::show(Entry& e, double now) {
     LOG("toast %lld: shown for %.1f s", (long long)e.toast.id, e.expiresAt - e.shownAt);
 }
 
-void Presenter::leave(Entry& e, double now) {
+void Presenter::leave(Entry& e, double now, bool instant) {
     if (e.state == State::Leaving) return;
-    // Never shown: dropped right away.
-    e.leaveAt = e.state == State::Showing ? now : -kForever;
+    // Never shown, or instant: dropped right away (its overlays go with it).
+    e.leaveAt = e.state == State::Showing && !instant ? now : -kForever;
     e.state = State::Leaving;
 }
 
@@ -509,7 +510,17 @@ void Presenter::place(double now, float dt) {
     const Mat34 group = upright * Mat34::rotationX(rad(kDockTilt) * k);
     const Vec3 up = axis(group, 1);
 
-    // Stack: newest at the bottom (on the anchor), older ones above.
+    // Footers: revealed while a click on their notification is recent.
+    bool animating = false;
+    for (auto& e : entries_) {
+        float want = e->state == State::Showing && now < e->footUntil ? 1.0f : 0.0f;
+        e->footT += std::clamp(want - e->footT, -dt / kFooterTime, dt / kFooterTime);
+        animating |= e->footT != want;
+    }
+    auto footExtent = [&](const Entry& e) { return easeInOutCubic(e.footT) * (kFooterGap + footerHm_); };
+
+    // Stack: newest at the bottom (on the anchor), older ones above, each
+    // above the footer of the one below it.
     std::vector<Entry*> stack;
     for (auto& e : entries_)
         if (e->state == State::Showing) stack.push_back(e.get());
@@ -518,29 +529,75 @@ void Presenter::place(double now, float dt) {
     bool moving = false;
     for (size_t i = 0; i < stack.size(); ++i) {
         Entry& e = *stack[i];
-        float want = i == 0 ? 0.0f : bottom + e.heightM * 0.5f;
+        float want = i == 0 ? 0.0f : bottom + footExtent(e) + e.heightM * 0.5f;
         bottom = want + e.heightM * 0.5f + kStackGap;
         if (!e.yPlaced) { e.y = want; e.yPlaced = true; }
         e.y = smoothDamp(e.y, want, e.yVel, kStackTime, dt);
         moving |= std::fabs(e.y - want) > 1e-4f;
     }
+    auto center = [&](const Entry& e) { return pivot + up * (anchorH_ * 0.5f + e.y); };
+
+    // A controller pointing at a notification and clicking: shows how to act
+    // on it (the Desktop view), and keeps it up meanwhile, as hovering does on
+    // Windows.
+    if (m != Mode::Hidden && input_.ok()) {
+        input_.update();
+        const Vec3 right = axis(group, 0), normal = axis(group, 2);
+        for (int hand = 0; hand < 2; ++hand) {
+            float o[3], d[3];
+            if (!input_.clicked(hand) || !input_.pointerRay(hand, o, d)) continue;
+            const Vec3 origin{o[0], o[1], o[2]}, dir{d[0], d[1], d[2]};
+            const float dn = dir.dot(normal);
+            if (dn > -1e-4f) continue; // parallel, or from behind
+            for (Entry* e : stack) {
+                const Vec3 c = center(*e);
+                const float t = (c - origin).dot(normal) / dn;
+                if (t <= 0 || t > 4.0f) continue;
+                const Vec3 hit = origin + dir * t - c;
+                const float lx = hit.dot(right), ly = hit.dot(up), hh = e->heightM * 0.5f;
+                if (std::fabs(lx) > settings_.width * 0.5f || ly > hh || ly < -hh - footExtent(*e)) continue;
+                if (e->footCanvas.width() == 0) {
+                    const MicaField* field = settings_.mica && e->field.valid() ? &e->field : nullptr;
+                    float h = renderer_.renderFooter(footerText(), field, e->theme, settings_.renderScale, kFallbackOpacity, e->footCanvas);
+                    footerHm_ = h * settings_.width / ToastRenderer::kWidth;
+                    e->footer = std::make_unique<ToastOverlay>();
+                    if (e->footer->create("swn.toast." + std::to_string(++overlayCounter_) + ".footer", 198)) e->footer->upload(e->footCanvas);
+                    else e->footer.reset();
+                }
+                e->footUntil = now + kFooterShown;
+                e->expiresAt = std::max(e->expiresAt, now + kFooterShown);
+                LOG("toast %lld: clicked", (long long)e->toast.id);
+                break;
+            }
+        }
+    }
 
     // Overlay poses: notifications appear and disappear in place, fading.
     const float widthScale = settings_.width / (ToastRenderer::kWidth * settings_.renderScale); // m per content pixel
     const float ga = easeInOutCubic(std::clamp(groupAlpha_, 0.0f, 1.0f));
-    bool animating = moving || chasing_ || groupAlpha_ != wantAlpha || std::fabs(dockBlend_ - (docked ? 1.0f : 0.0f)) > 1e-3f;
+    animating |= moving || chasing_ || groupAlpha_ != wantAlpha || std::fabs(dockBlend_ - (docked ? 1.0f : 0.0f)) > 1e-3f;
     for (auto& e : entries_) {
         if (!e->overlay || (e->state != State::Showing && e->state != State::Leaving)) continue;
         float alpha = easeInOutCubic(std::clamp(float((now - e->shownAt) / kEnterTime), 0.0f, 1.0f));
         if (e->state == State::Leaving) alpha *= 1 - easeInOutCubic(std::clamp(float((now - e->leaveAt) / kLeaveTime), 0.0f, 1.0f));
         animating |= now - e->shownAt < kEnterTime || e->state == State::Leaving;
-        Vec3 p = pivot + up * (anchorH_ * 0.5f + e->y);
+        const Vec3 p = center(*e);
         Mat34 pose = group;
         pose.m[0][3] = p.x; pose.m[1][3] = p.y; pose.m[2][3] = p.z;
         if (alpha * ga > 0.004f) updateMica(*e, pose, head, now);
         const float widthM = float(e->canvas.width()) * widthScale;
         e->overlay->place(pose, widthM, alpha * ga);
         if (e->backdrop) e->backdrop->place(pose, widthM, alpha * ga);
+        if (e->footer) {
+            // Slides down out of the notification's bottom edge (it starts
+            // tucked behind it: drawn underneath).
+            const float k = easeInOutCubic(e->footT), hh = e->heightM * 0.5f;
+            const float tucked = hh - footerHm_ * 0.5f, out = hh + kFooterGap + footerHm_ * 0.5f;
+            const Vec3 fp = p - up * (tucked + (out - tucked) * k);
+            Mat34 fpose = group;
+            fpose.m[0][3] = fp.x; fpose.m[1][3] = fp.y; fpose.m[2][3] = fp.z;
+            e->footer->place(fpose, float(e->footCanvas.width()) * widthScale, alpha * ga * std::min(1.0f, k * 2.0f));
+        }
     }
     pace_ = animating ? Pace::Frame : Pace::Watch;
 }

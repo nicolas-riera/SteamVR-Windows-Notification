@@ -150,17 +150,27 @@ int runSnapshot(const std::wstring& outDir) {
         for (bool light : {false, true}) {
             Theme th = Theme::make(light, accent);
             Canvas content, out;
-            ToastVisual sample = v;
-            sample.footer = light ? "Ouvrez la Vue Bureau pour interagir avec la notification"
-                                  : "Open the Desktop view to interact with the notification";
-            float h = renderer.render(sample, th, s, content);
-            // Backdrop at full size here, then the content over it.
-            renderer.renderBackdrop(&field, th, h, s, content.width(), content.height(), 0.85f, out);
-            for (int y = 0; y < content.height(); ++y)
-                for (int x = 0; x < content.width(); ++x) {
-                    const uint8_t* p = content.data() + (size_t(y) * content.width() + x) * 4;
-                    if (p[3]) out.blend(x, y, Color{p[0], p[1], p[2], p[3]}, 1.0f);
-                }
+            float h = renderer.render(v, th, s, content);
+            // Backdrop at full size here, then the content over it; below,
+            // the footer shown once clicked.
+            Canvas back, foot;
+            renderer.renderBackdrop(&field, th, h, s, content.width(), content.height(), 0.85f, back);
+            renderer.renderFooter(light ? "Ouvrez la Vue Bureau pour interagir avec la notification"
+                                        : "Open the Desktop view to interact with the notification",
+                                  &field, th, s, 0.85f, foot);
+            const int footY = content.height() - int(ToastRenderer::kShadowPad * s) + int(6 * s) - int(ToastRenderer::kShadowPad * s);
+            out.resize(content.width(), footY + foot.height());
+            out.clear();
+            auto over = [&](const Canvas& src, int oy) {
+                for (int y = 0; y < src.height(); ++y)
+                    for (int x = 0; x < src.width(); ++x) {
+                        const uint8_t* p = src.data() + (size_t(y) * src.width() + x) * 4;
+                        if (p[3] && y + oy >= 0 && y + oy < out.height()) out.blend(x, y + oy, Color{p[0], p[1], p[2], p[3]}, 1.0f);
+                    }
+            };
+            over(foot, footY);
+            over(back, 0);
+            over(content, 0);
             writePng(out, outDir + L"\\" + util::fromUtf8(name) + (light ? L"_light.png" : L"_dark.png"));
         }
     renderIcon(fonts, outDir + L"\\icon.png");
