@@ -35,7 +35,7 @@ constexpr float kFooterGap = 0.006f;   // m, between a notification and its foot
 constexpr int64_t kExpirySlack = 20000000; // 2 s in FILETIME units: removed this close to its expiry = expired
 constexpr double kBannerExtra = 1.0;   // s, Windows keeps a banner ~1 s longer than its setting (measured)
 constexpr size_t kMaxNormalQueue = 20;
-constexpr double kTrimAfter = 30.0;     // s without notifications before freeing the GPU device
+constexpr double kTrimAfter = 30.0;     // s without notifications before trimming memory
 constexpr int kMaxPriority = 3;
 constexpr double kForever = std::numeric_limits<double>::infinity();
 
@@ -570,6 +570,8 @@ void Presenter::place(double now, float dt) {
                 break;
             }
         }
+    } else {
+        input_.pause();
     }
 
     // Overlay poses: notifications appear and disappear in place, fading.
@@ -613,14 +615,16 @@ void Presenter::tick(double now) {
         // Nothing on screen: the next notification appears in front of you.
         placed_ = false;
         fresh_ = true;
+        input_.pause();
         bool waiting = false;
         for (auto& e : entries_) waiting |= e->state == State::Waiting;
         pace_ = waiting ? Pace::Watch : Pace::Idle;
         if (idleSince_ < 0) idleSince_ = now;
         if (!trimmed_ && entries_.empty() && now - idleSince_ > kTrimAfter) {
-            // Long idle: give back the GPU device and the memory pages.
+            // Long idle: give back the mirror texture and the memory pages.
+            // The D3D11 device stays: SteamVR keeps references to it, so a
+            // released one is never freed and each new one would add ~40 MB.
             sampler_.release();
-            OverlayTexture::releaseDevice();
             SetProcessWorkingSetSize(GetCurrentProcess(), SIZE_T(-1), SIZE_T(-1));
             trimmed_ = true;
         }

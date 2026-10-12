@@ -18,7 +18,8 @@ public:
     OverlayTexture& operator=(const OverlayTexture&) = delete;
 
     void upload(vr::VROverlayHandle_t overlay, const Canvas& canvas);
-    // Frees the shared D3D11 device (recreated on the next upload). Every
+    // Frees the shared D3D11 device, at exit only: SteamVR keeps references
+    // to it, so recreating it later would leak the old one. Every
     // OverlayTexture must have been destroyed.
     static void releaseDevice();
     // The shared device (created on demand; null if D3D11 is unavailable).

@@ -10,6 +10,9 @@ class VrInput {
 public:
     bool init(const std::string& actionManifestPath);
     void update();
+    // Not read for a while: the next update() only records the buttons (a
+    // trigger already held is no click).
+    void pause() { primed_ = false; }
     // Rising edge since the previous update(). hand: 0 = left, 1 = right.
     bool clicked(int hand) const { return edge_[hand]; }
     bool pointerRay(int hand, float origin[3], float dir[3]) const;
@@ -17,6 +20,7 @@ public:
 
 private:
     bool ok_ = false;
+    bool primed_ = false;
     vr::VRActionSetHandle_t set_ = vr::k_ulInvalidActionSetHandle;
     vr::VRActionHandle_t activate_ = vr::k_ulInvalidActionHandle;
     vr::VRActionHandle_t pointer_ = vr::k_ulInvalidActionHandle;

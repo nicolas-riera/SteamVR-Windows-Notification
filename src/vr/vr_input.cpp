@@ -29,9 +29,10 @@ void VrInput::update() {
         vr::InputDigitalActionData_t d{};
         bool state = vr::VRInput()->GetDigitalActionData(activate_, &d, sizeof(d), hands_[hand]) == vr::VRInputError_None &&
                      d.bActive && d.bState;
-        edge_[hand] = state && !prev_[hand];
+        edge_[hand] = primed_ && state && !prev_[hand];
         prev_[hand] = state;
     }
+    primed_ = true;
 }
 
 bool VrInput::pointerRay(int hand, float o[3], float d[3]) const {

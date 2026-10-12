@@ -98,4 +98,4 @@ The CRT is linked statically, so no redistributable is needed. SQLite is the cop
 - No polling thread. The loop sleeps on the notification folder's change handle, checks the database version 4 times per second, and polls SteamVR events.
 - It wakes every frame only while something moves, and 30 times per second while a notification is shown.
 - The content texture is drawn once per notification. The Mica backdrop is a separate low-resolution overlay, refreshed a few times per second from the scene.
-- After 30 s without notifications, the GPU device is released and the memory pages are trimmed.
+- After 30 s without notifications, the scene sampling is released and the memory pages are trimmed. The D3D11 device is kept: SteamVR holds references to it, so a released device would never be freed.

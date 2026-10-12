@@ -11,6 +11,7 @@
 #include "core/util.h"
 #include "gfx/font.h"
 #include "notify/wpn_store.h"
+#include "vr/overlay_texture.h"
 
 namespace {
 
@@ -91,61 +92,65 @@ int runOverlay() {
         vr::VR_Shutdown();
         return 1;
     }
-    WpnStore store;
-    store.open();
-    Presenter presenter(settings, fonts, store, util::toUtf8(dir + L"\\actions.json"));
-    LOG("running");
+    {
+        // Scoped: the overlays and textures go before SteamVR is shut down.
+        WpnStore store;
+        store.open();
+        Presenter presenter(settings, fonts, store, util::toUtf8(dir + L"\\actions.json"));
+        LOG("running");
 
-    double nextDbCheck = 0, nextOpenTry = util::now() + 5.0;
-    bool running = true;
-    while (running) {
-        // Sleep as long as possible: every frame only while something moves,
-        // ~30 Hz while a notification is shown (to notice head turns), and
-        // 4 Hz with nothing on screen (database / SteamVR events).
-        bool dbSignalled = false;
-        if (presenter.pace() == Presenter::Pace::Frame) {
-            vr::VROverlay()->WaitFrameSync(30);
-            if (WaitForSingleObject(presenter.downloadEvent(), 0) == WAIT_OBJECT_0) presenter.imagesArrived(util::now());
-        } else {
-            HANDLE handles[2];
-            DWORD n = 0;
-            handles[n++] = presenter.downloadEvent();
-            if (store.changeHandle() != INVALID_HANDLE_VALUE) handles[n++] = store.changeHandle();
-            DWORD r = WaitForMultipleObjects(n, handles, FALSE, presenter.pace() == Presenter::Pace::Watch ? 33 : 250);
-            if (r == WAIT_OBJECT_0) presenter.imagesArrived(util::now());
-            if (r == WAIT_OBJECT_0 + 1) {
-                store.rearm();
-                dbSignalled = true;
+        double nextDbCheck = 0, nextOpenTry = util::now() + 5.0;
+        bool running = true;
+        while (running) {
+            // Sleep as long as possible: every frame only while something moves,
+            // ~30 Hz while a notification is shown (to notice head turns), and
+            // 4 Hz with nothing on screen (database / SteamVR events).
+            bool dbSignalled = false;
+            if (presenter.pace() == Presenter::Pace::Frame) {
+                vr::VROverlay()->WaitFrameSync(30);
+                if (WaitForSingleObject(presenter.downloadEvent(), 0) == WAIT_OBJECT_0) presenter.imagesArrived(util::now());
+            } else {
+                HANDLE handles[2];
+                DWORD n = 0;
+                handles[n++] = presenter.downloadEvent();
+                if (store.changeHandle() != INVALID_HANDLE_VALUE) handles[n++] = store.changeHandle();
+                DWORD r = WaitForMultipleObjects(n, handles, FALSE, presenter.pace() == Presenter::Pace::Watch ? 33 : 250);
+                if (r == WAIT_OBJECT_0) presenter.imagesArrived(util::now());
+                if (r == WAIT_OBJECT_0 + 1) {
+                    store.rearm();
+                    dbSignalled = true;
+                }
             }
-        }
-        double now = util::now();
+            double now = util::now();
 
-        vr::VREvent_t e;
-        while (vr::VRSystem()->PollNextEvent(&e, sizeof(e))) {
-            switch (e.eventType) {
-            case vr::VREvent_Quit:
-                vr::VRSystem()->AcknowledgeQuit_Exiting();
-                running = false;
-                break;
-            case vr::VREvent_DashboardActivated: presenter.setDashboard(true); break;
-            case vr::VREvent_DashboardDeactivated: presenter.setDashboard(false); break;
-            default: break;
+            vr::VREvent_t e;
+            while (vr::VRSystem()->PollNextEvent(&e, sizeof(e))) {
+                switch (e.eventType) {
+                case vr::VREvent_Quit:
+                    vr::VRSystem()->AcknowledgeQuit_Exiting();
+                    running = false;
+                    break;
+                case vr::VREvent_DashboardActivated: presenter.setDashboard(true); break;
+                case vr::VREvent_DashboardDeactivated: presenter.setDashboard(false); break;
+                default: break;
+                }
             }
-        }
 
-        if (store.isOpen()) {
-            if (dbSignalled || now >= nextDbCheck) {
-                nextDbCheck = now + 0.1;
-                if (store.changed()) presenter.syncDatabase(now);
+            if (store.isOpen()) {
+                if (dbSignalled || now >= nextDbCheck) {
+                    nextDbCheck = now + 0.1;
+                    if (store.changed()) presenter.syncDatabase(now);
+                }
+            } else if (now >= nextOpenTry) {
+                nextOpenTry = now + 5.0;
+                store.open();
             }
-        } else if (now >= nextOpenTry) {
-            nextOpenTry = now + 5.0;
-            store.open();
+            presenter.tick(now);
         }
-        presenter.tick(now);
     }
 
     LOG("exiting");
+    OverlayTexture::releaseDevice();
     vr::VR_Shutdown();
     CoUninitialize();
     if (mutex) CloseHandle(mutex);

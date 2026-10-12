@@ -77,7 +77,7 @@ void MirrorSampler::release() {
     if (staging_) { staging_->Release(); staging_ = nullptr; }
     if (mirror_) { mirror_->Release(); mirror_ = nullptr; }
     if (srv_) {
-        vr::VRCompositor()->ReleaseMirrorTextureD3D11(srv_);
+        if (vr::VRCompositor()) vr::VRCompositor()->ReleaseMirrorTextureD3D11(srv_);
         srv_ = nullptr;
     }
     stagingW_ = stagingH_ = 0;
