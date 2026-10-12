@@ -1,0 +1,16 @@
+{
+  "source": "builtin",
+  "applications": [
+    {
+      "app_key": "steamvr.windows.notification",
+      "launch_type": "binary",
+      "binary_path_windows": "SteamVrWindowsNotification.exe",
+      "is_dashboard_overlay": true,
+      "image_path": "icon.png",
+      "strings": {
+        "en_us": { "name": "SteamVR Windows Notification", "description": "Shows Windows notifications in VR" },
+        "fr_fr": { "name": "SteamVR Windows Notification", "description": "Affiche les notifications Windows en VR" }
+      }
+    }
+  ]
+}
