@@ -9,7 +9,6 @@
 #include "core/util.h"
 #include "gfx/font.h"
 #include "notify/system_state.h"
-#include "render/mica.h"
 #include "render/toast_renderer.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -79,8 +78,7 @@ int runSnapshot(const std::wstring& outDir) {
     CreateDirectoryW(outDir.c_str(), nullptr);
     FontSet fonts;
     if (!fonts.init()) return 1;
-    Mica mica;
-    ToastRenderer renderer(fonts, mica);
+    ToastRenderer renderer(fonts);
     const float s = 2.0f;
     const int icon = ToastRenderer::iconPx(s);
 
@@ -140,7 +138,7 @@ int runSnapshot(const std::wstring& outDir) {
     for (auto& [name, v] : samples)
         for (bool light : {false, true}) {
             Canvas c;
-            renderer.render(v, Theme::make(light, accent), s, true, c);
+            renderer.render(v, Theme::make(light, accent), s, 0.8f, c);
             writePng(c, outDir + L"\\" + util::fromUtf8(name) + (light ? L"_light.png" : L"_dark.png"));
         }
     renderIcon(fonts, outDir + L"\\icon.png");

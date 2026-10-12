@@ -16,12 +16,17 @@
 namespace {
 
 constexpr double kImageWait = 1.5;     // s, max delay of a toast waiting for a remote image
-constexpr double kEnterTime = 0.38;    // s, appear animation
-constexpr double kLeaveTime = 0.30;    // s, disappear animation
+constexpr double kEnterTime = 0.30;    // s, fade in
+constexpr double kLeaveTime = 0.30;    // s, fade out
 constexpr float kGroupFadeTime = 0.22f;// s, fade when the SteamVR menu hides / shows them
 constexpr float kStackTime = 0.22f;    // s, stack re-layout glide
 constexpr float kStackGap = 0.012f;    // m, between stacked notifications
+constexpr float kDockGap = 0.008f;     // m, between the menu bar and a docked notification
+constexpr float kDockLift = 0.015f;    // m, in front of the menu, so it is never behind it
+constexpr float kDockAngle = 30.0f;    // degrees: docks when you face the menu within this
+constexpr float kUndockAngle = 45.0f;  // and detaches past this
 constexpr size_t kMaxNormalQueue = 20;
+constexpr double kTrimAfter = 30.0;    // s without notifications before freeing the GPU device
 constexpr int kMaxPriority = 3;
 constexpr double kForever = std::numeric_limits<double>::infinity();
 
@@ -59,7 +64,7 @@ bool isPriority(Scenario s) { return s != Scenario::Default; }
 } // namespace
 
 Presenter::Presenter(const Settings& settings, FontSet& fonts, WpnStore& store)
-    : settings_(settings), fonts_(fonts), store_(store), renderer_(fonts, mica_) {
+    : settings_(settings), fonts_(fonts), store_(store), renderer_(fonts) {
     dashboard_ = vr::VROverlay()->IsDashboardVisible();
 }
 
@@ -80,11 +85,13 @@ bool Presenter::allowed(const Toast& t) {
 }
 
 double Presenter::duration(const Toast& t) const {
-    // Reminders, alarms and calls with a button stay until acted upon.
+    // Reminders, alarms and calls with a button stay on Windows until acted
+    // upon. Closing their banner leaves no trace other apps can see, so they
+    // only stay until removed from Windows if the user asked for it.
     bool persistent = (t.scenario == Scenario::Reminder || t.scenario == Scenario::Alarm || t.scenario == Scenario::IncomingCall) &&
                       t.hasActions;
-    if (persistent) return kForever;
-    if (t.longDuration) return settings_.longDuration;
+    if (persistent && settings_.keepReminders) return kForever;
+    if (t.longDuration || persistent) return settings_.longDuration;
     return settings_.shortDuration > 0 ? settings_.shortDuration : sys::messageDuration();
 }
 
@@ -201,7 +208,7 @@ void Presenter::render(Entry& e) {
     bool light = settings_.theme == "light" || (settings_.theme == "auto" && sys::lightTheme());
     Theme theme = Theme::make(light, sys::accentColor());
     e.visual.toast = e.toast;
-    renderer_.render(e.visual, theme, settings_.renderScale, settings_.mica, e.canvas);
+    renderer_.render(e.visual, theme, settings_.renderScale, settings_.opacity, e.canvas);
     if (e.overlay) e.overlay->upload(e.canvas);
     const float mpp = settings_.width / (ToastRenderer::kWidth * settings_.renderScale);
     e.heightM = (float(e.canvas.height()) - 2 * ToastRenderer::kShadowPad * settings_.renderScale) * mpp;
@@ -256,7 +263,6 @@ void Presenter::lifecycle(double now) {
 void Presenter::setDashboard(bool open) {
     if (open == dashboard_) return;
     dashboard_ = open;
-    dashTargetSet_ = false;
     nextTabPoll_ = 0;
     desktopTab_ = false;
 }
@@ -292,30 +298,37 @@ bool Presenter::headPose(Mat34& head) {
     return true;
 }
 
-// In front of the open SteamVR menu: same direction as the menu, closer than it.
-bool Presenter::dashboardAnchor(const Vec3& head, Vec3& target) {
-    vr::VROverlayHandle_t ui = vr::k_ulOverlayHandleInvalid;
-    if (vr::VROverlay()->FindOverlay("system.systemui", &ui) != vr::VROverlayError_None) return false;
-    vr::ETrackingUniverseOrigin origin;
-    vr::HmdMatrix34_t m;
-    if (vr::VROverlay()->GetOverlayTransformAbsolute(ui, &origin, &m) != vr::VROverlayError_None) return false;
-    Vec3 center = position(toMat(m));
-    if (center.length() < 1e-4f) return false; // not placed yet
-    if (dashTargetSet_ && (center - dashCenter_).length() < 0.05f) {
-        target = dashTarget_;
-        return true;
+// The SteamVR menu's bottom bar (Steam's: clock, battery...): its width
+// follows its content, so its right end is found from the texture's alpha.
+bool Presenter::barTopRight(double now, Mat34& corner) {
+    vr::IVROverlay* ov = vr::VROverlay();
+    vr::VROverlayHandle_t bar = vr::k_ulOverlayHandleInvalid;
+    if (ov->FindOverlay("valve.steam.gamepadui.bar", &bar) != vr::VROverlayError_None || !ov->IsOverlayVisible(bar)) return false;
+    vr::HmdVector2_t size{};
+    if (ov->GetOverlayMouseScale(bar, &size) != vr::VROverlayError_None || size.v[0] < 1 || size.v[1] < 1) return false;
+    if (now >= nextBarScan_) {
+        nextBarScan_ = now + 1.0;
+        uint32_t w = 0, h = 0;
+        std::vector<uint8_t> px(size_t(size.v[0]) * size_t(size.v[1]) * 4);
+        barRight_ = size.v[0];
+        if (ov->GetOverlayImageData(bar, px.data(), uint32_t(px.size()), &w, &h) == vr::VROverlayError_None && w && h &&
+            size_t(w) * h * 4 <= px.size()) {
+            for (int x = int(w) - 1; x >= 0; --x) {
+                bool opaque = false;
+                for (uint32_t y = 0; y < h && !opaque; y += 2) opaque = px[(size_t(y) * w + x) * 4 + 3] > 40;
+                if (opaque) {
+                    barRight_ = float(x + 1) * size.v[0] / float(w);
+                    break;
+                }
+            }
+        }
     }
-    Vec3 to = center - head;
-    float yaw, pitch;
-    toYawPitch(to, yaw, pitch);
-    float dist = std::min(settings_.distance, to.length() * 0.6f);
-    // Lower part of the view, as when following the gaze.
-    float p = std::clamp(pitch + rad(settings_.pitch) * 0.5f, rad(-60.0f), rad(30.0f));
-    dashTarget_ = head + fromYawPitch(yaw, p) * dist;
-    dashCenter_ = center;
-    dashTargetSet_ = true;
-    target = dashTarget_;
-    return true;
+    // Overlay coordinates: origin at the bottom-left, so y = height is the top edge.
+    vr::HmdMatrix34_t m;
+    if (ov->GetTransformForOverlayCoordinates(bar, vr::TrackingUniverseStanding, {barRight_, size.v[1]}, &m) != vr::VROverlayError_None)
+        return false;
+    corner = toMat(m);
+    return position(corner).length() > 1e-4f;
 }
 
 void Presenter::place(double now, float dt) {
@@ -323,28 +336,48 @@ void Presenter::place(double now, float dt) {
     Mat34 head;
     if (!headPose(head)) return;
     const Vec3 eye = position(head);
+    Vec3 fwd{-head.m[0][2], -head.m[1][2], -head.m[2][2]};
+    float headYaw, headPitch;
+    toYawPitch(fwd, headYaw, headPitch);
+    // Looking straight up or down: the heading is meaningless, keep it.
+    if (std::sqrt(fwd.x * fwd.x + fwd.z * fwd.z) < 0.25f) headYaw = lastYaw_;
+    lastYaw_ = headYaw;
 
-    // Where the group wants to be.
-    Vec3 target;
-    bool alwaysChase = false;
-    if (m == Mode::Dashboard && dashboardAnchor(eye, target)) {
-        alwaysChase = true;
+    // Newest notification on screen (the group's anchor).
+    Entry* newest = nullptr;
+    for (auto& e : entries_)
+        if (e->state == State::Showing && (!newest || e->shownAt > newest->shownAt)) newest = e.get();
+
+    // Where the group wants to be: below the gaze, or with the SteamVR menu
+    // open, just above the right end of its bottom bar (as long as you face it).
+    Vec3 target = eye + fromYawPitch(headYaw, std::clamp(headPitch + rad(settings_.pitch), rad(-75.0f), rad(60.0f))) * settings_.distance;
+    bool docked = false;
+    Mat34 corner;
+    if (m == Mode::Dashboard && barTopRight(now, corner)) {
+        const Vec3 cornerPos = position(corner);
+        Vec3 right = Vec3{corner.m[0][0], corner.m[1][0], corner.m[2][0]}.normalized();
+        Vec3 up = Vec3{corner.m[0][1], corner.m[1][1], corner.m[2][1]}.normalized();
+        Vec3 normal = Vec3{corner.m[0][2], corner.m[1][2], corner.m[2][2]}.normalized();
+        float h = newest ? newest->heightM : 0.1f;
+        Vec3 dock = cornerPos + up * (kDockGap + h * 0.5f) - right * (settings_.width * 0.5f) + normal * kDockLift;
+        // Detaches when you look away from the menu, docks again when you face it.
+        float dockYaw, dockPitch;
+        toYawPitch(dock - eye, dockYaw, dockPitch);
+        float off = std::fabs(deg(wrapAngle(dockYaw - headYaw)));
+        if (docked_ && off > kUndockAngle) docked_ = false;
+        else if (!docked_ && off < kDockAngle) docked_ = true;
+        if (docked_) {
+            target = dock;
+            docked = true;
+        }
     } else {
-        Vec3 fwd{-head.m[0][2], -head.m[1][2], -head.m[2][2]};
-        float yaw, pitch;
-        toYawPitch(fwd, yaw, pitch);
-        // Looking straight up or down: the heading is meaningless, keep it.
-        if (std::sqrt(fwd.x * fwd.x + fwd.z * fwd.z) < 0.25f) yaw = lastYaw_;
-        lastYaw_ = yaw;
-        float p = std::clamp(pitch + rad(settings_.pitch), rad(-75.0f), rad(60.0f));
-        target = eye + fromYawPitch(yaw, p) * settings_.distance;
+        docked_ = true; // docks right away the next time the menu opens
     }
 
     // Fade in / out with the SteamVR menu's Desktop tab.
     float wantAlpha = m == Mode::Hidden ? 0.0f : 1.0f;
-    if (groupAlpha_ <= 0.0f && wantAlpha > 0.0f) placed_ = false; // reappears in front of you
+    if (groupAlpha_ <= 0.0f && wantAlpha > 0.0f) placed_ = false; // reappears in place
     groupAlpha_ += std::clamp(wantAlpha - groupAlpha_, -dt / kGroupFadeTime, dt / kGroupFadeTime);
-    lastMode_ = m;
 
     if (fresh_) {
         // First notification on screen: no fade of the group, only its own.
@@ -365,8 +398,9 @@ void Presenter::place(double now, float dt) {
         toYawPitch(tgt, ty, tp);
         float cd = cur.length(), td = tgt.length();
         float dy = wrapAngle(ty - cy), dp = tp - cp, dd = td - cd;
-        if (!chasing_ && (alwaysChase || std::fabs(deg(dy)) > settings_.deadzoneYaw || std::fabs(deg(dp)) > settings_.deadzonePitch ||
-                          std::fabs(dd) > 0.2f * td))
+        // Docked: always on its spot. Otherwise, still while within the cone.
+        if (!chasing_ && ((docked && (cur - tgt).length() > 0.002f) || std::fabs(deg(dy)) > settings_.deadzoneYaw ||
+                          std::fabs(deg(dp)) > settings_.deadzonePitch || std::fabs(dd) > 0.2f * td))
             chasing_ = true;
         if (chasing_) {
             float ny = smoothDamp(cy, cy + dy, yawVel_, settings_.followTime, dt);
@@ -375,9 +409,10 @@ void Presenter::place(double now, float dt) {
             pos_ = eye + fromYawPitch(ny, np) * nd;
             bool arrived = std::fabs(deg(wrapAngle(ty - ny))) < 0.2f && std::fabs(deg(tp - np)) < 0.2f && std::fabs(td - nd) < 0.003f &&
                            std::fabs(yawVel_) < 0.01f && std::fabs(pitchVel_) < 0.01f;
-            if (arrived && !alwaysChase) {
+            if (arrived) {
                 chasing_ = false;
                 yawVel_ = pitchVel_ = distVel_ = 0;
+                if (docked) pos_ = target;
             }
         }
     }
@@ -398,37 +433,21 @@ void Presenter::place(double now, float dt) {
         moving |= std::fabs(e.y - want) > 1e-4f;
     }
 
-    // Overlay poses.
+    // Overlay poses: notifications appear and disappear in place, fading.
     const Mat34 group = facing(pos_, eye);
-    const Vec3 right{group.m[0][0], group.m[1][0], group.m[2][0]}, up{group.m[0][1], group.m[1][1], group.m[2][1]};
+    const Vec3 up{group.m[0][1], group.m[1][1], group.m[2][1]};
     const float mpp = settings_.width / (ToastRenderer::kWidth * settings_.renderScale);
     const float ga = easeInOutCubic(std::clamp(groupAlpha_, 0.0f, 1.0f));
-    bool animating = moving || chasing_ || (groupAlpha_ > 0 && groupAlpha_ < 1) || groupAlpha_ != wantAlpha;
+    bool animating = moving || chasing_ || groupAlpha_ != wantAlpha;
     for (auto& e : entries_) {
         if (!e->overlay || (e->state != State::Showing && e->state != State::Leaving)) continue;
-        float alpha = 1, slideX = 0, slideY = 0, scale = 1;
-        float in = std::clamp(float((now - e->shownAt) / kEnterTime), 0.0f, 1.0f);
-        if (in < 1) {
-            // Rises into place while fading in, as on Windows Mixed Reality.
-            float k = easeOutCubic(in);
-            alpha = k;
-            slideY = -(1 - k) * 0.035f;
-            scale = 0.92f + 0.08f * k;
-            animating = true;
-        }
-        if (e->state == State::Leaving) {
-            // Slides away to the right like Windows' banner, fading out.
-            float out = std::clamp(float((now - e->leaveAt) / kLeaveTime), 0.0f, 1.0f);
-            float k = easeInCubic(out);
-            alpha *= 1 - k;
-            slideX = k * 0.07f;
-            scale *= 1 - 0.04f * k;
-            animating = true;
-        }
-        Vec3 p = pos_ + right * slideX + up * (e->y + slideY);
+        float alpha = easeInOutCubic(std::clamp(float((now - e->shownAt) / kEnterTime), 0.0f, 1.0f));
+        if (e->state == State::Leaving) alpha *= 1 - easeInOutCubic(std::clamp(float((now - e->leaveAt) / kLeaveTime), 0.0f, 1.0f));
+        animating |= now - e->shownAt < kEnterTime || e->state == State::Leaving;
+        Vec3 p = pos_ + up * e->y;
         Mat34 pose = group;
         pose.m[0][3] = p.x; pose.m[1][3] = p.y; pose.m[2][3] = p.z;
-        e->overlay->place(pose, float(e->canvas.width()) * mpp * scale, alpha * ga);
+        e->overlay->place(pose, float(e->canvas.width()) * mpp, alpha * ga);
     }
     pace_ = animating ? Pace::Frame : Pace::Watch;
 }
@@ -446,7 +465,16 @@ void Presenter::tick(double now) {
         bool waiting = false;
         for (auto& e : entries_) waiting |= e->state == State::Waiting;
         pace_ = waiting ? Pace::Watch : Pace::Idle;
+        if (idleSince_ < 0) idleSince_ = now;
+        if (!trimmed_ && entries_.empty() && now - idleSince_ > kTrimAfter) {
+            // Long idle: give back the GPU device and the memory pages.
+            OverlayTexture::releaseDevice();
+            SetProcessWorkingSetSize(GetCurrentProcess(), SIZE_T(-1), SIZE_T(-1));
+            trimmed_ = true;
+        }
         return;
     }
+    idleSince_ = -1;
+    trimmed_ = false;
     place(now, dt);
 }

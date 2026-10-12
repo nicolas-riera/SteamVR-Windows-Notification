@@ -83,7 +83,8 @@ int runOverlay() {
 
     Settings settings;
     const std::wstring settingsPath = dir + L"\\settings.json";
-    if (!settings.load(settingsPath)) settings.save(settingsPath); // creates a hand-editable file
+    settings.load(settingsPath);
+    settings.save(settingsPath); // hand-editable, with every key (new ones included)
 
     FontSet fonts;
     if (!fonts.init()) {

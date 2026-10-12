@@ -34,8 +34,9 @@ public:
     bool changed();
 
     // Toasts inserted or replaced since the previous call. The first call
-    // only records the current position (old toasts are never shown).
+    // only records the toasts already there (they are never shown).
     std::vector<ToastRow> fetchNew();
+    // Ids of the toasts present at the last fetchNew().
     std::set<int64_t> toastIds();
     std::map<std::string, std::string> data(int64_t id);
 
@@ -49,6 +50,7 @@ private:
 
     sqlite3* db_ = nullptr;
     HANDLE change_ = INVALID_HANDLE_VALUE;
-    int64_t lastOrder_ = -1;
+    std::set<std::pair<int64_t, int64_t>> known_; // (Order, Id) of the toasts at the last scan
+    bool scanned_ = false;
     long long dataVersion_ = -1;
 };

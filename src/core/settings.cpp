@@ -19,11 +19,12 @@ bool Settings::load(const std::wstring& path) {
     followTime = std::clamp(j["followTime"].asFloat(followTime), 0.02f, 2.0f);
     theme = j["theme"].asString();
     if (theme != "dark" && theme != "light") theme = "auto";
-    mica = j["mica"].asBool(mica);
+    opacity = std::clamp(j["opacity"].asFloat(opacity), 0.3f, 1.0f);
     renderScale = std::clamp(j["renderScale"].asFloat(renderScale), 1.0f, 3.0f);
     respectDoNotDisturb = j["respectDoNotDisturb"].asBool(respectDoNotDisturb);
     shortDuration = std::clamp(j["shortDuration"].asFloat(shortDuration), 0.0f, 120.0f);
     longDuration = std::clamp(j["longDuration"].asFloat(longDuration), 1.0f, 300.0f);
+    keepReminders = j["keepReminders"].asBool(keepReminders);
     excludedApps.clear();
     for (const json::Value& v : j["excludedApps"].elements())
         if (v.isString() && !v.asString().empty()) excludedApps.push_back(v.asString());
@@ -45,11 +46,12 @@ bool Settings::save(const std::wstring& path) const {
     s += util::format("  \"deadzonePitch\": %.1f,\n", deadzonePitch);
     s += util::format("  \"followTime\": %.2f,\n", followTime);
     s += util::format("  \"theme\": \"%s\",\n", theme.c_str());
-    s += util::format("  \"mica\": %s,\n", mica ? "true" : "false");
+    s += util::format("  \"opacity\": %.2f,\n", opacity);
     s += util::format("  \"renderScale\": %.1f,\n", renderScale);
     s += util::format("  \"respectDoNotDisturb\": %s,\n", respectDoNotDisturb ? "true" : "false");
     s += util::format("  \"shortDuration\": %.1f,\n", shortDuration);
     s += util::format("  \"longDuration\": %.1f,\n", longDuration);
+    s += util::format("  \"keepReminders\": %s,\n", keepReminders ? "true" : "false");
     s += "  \"excludedApps\": [" + apps + "]\n}\n";
     return util::writeFile(path, s);
 }

@@ -7,7 +7,8 @@
 //  - Tag-along placement, like Windows Mixed Reality: the notifications float
 //    below the gaze, stay still while within a small cone, then glide back.
 //  - SteamVR menu: hidden while the Desktop tab is shown (the real banner is
-//    visible there), otherwise moved in front of the menu.
+//    visible there), otherwise docked above the right end of its bottom bar
+//    (and back in front of you when you look away from the menu).
 #include <windows.h>
 #include <openvr.h>
 
@@ -19,7 +20,6 @@
 #include "gfx/canvas.h"
 #include "notify/app_info.h"
 #include "notify/downloader.h"
-#include "render/mica.h"
 #include "render/toast_renderer.h"
 #include "vr/toast_overlay.h"
 
@@ -72,7 +72,7 @@ private:
     void lifecycle(double now);
     Mode mode(double now);
     bool headPose(Mat34& head);
-    bool dashboardAnchor(const Vec3& head, Vec3& target);
+    bool barTopRight(double now, Mat34& corner);
     void place(double now, float dt);
 
     const Settings& settings_;
@@ -80,7 +80,6 @@ private:
     WpnStore& store_;
     AppDirectory apps_;
     Downloader downloader_;
-    Mica mica_;
     ToastRenderer renderer_;
     std::vector<std::unique_ptr<Entry>> entries_;
     int overlayCounter_ = 0;
@@ -90,18 +89,19 @@ private:
     // Group placement (world, standing universe).
     bool placed_ = false;
     bool fresh_ = true; // nothing was on screen
+    double idleSince_ = -1;
+    bool trimmed_ = false;
     Vec3 pos_;
     float yawVel_ = 0, pitchVel_ = 0, distVel_ = 0;
     bool chasing_ = false;
     float lastYaw_ = 0;
     float groupAlpha_ = 0;     // 0..1, linear (eased when applied)
-    Mode lastMode_ = Mode::Follow;
 
     // SteamVR menu.
     bool dashboard_ = false;
     bool desktopTab_ = false;
     double nextTabPoll_ = 0;
-    bool dashTargetSet_ = false;
-    Vec3 dashTarget_;
-    Vec3 dashCenter_;
+    bool docked_ = true;      // at the bar, not detached by looking away
+    double nextBarScan_ = 0;
+    float barRight_ = 0;      // right end of the bar content (overlay pixels)
 };

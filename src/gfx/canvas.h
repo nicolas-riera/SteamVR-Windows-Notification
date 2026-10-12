@@ -61,6 +61,8 @@ public:
     void drawImage(const Image& img, Rect dst, float radius, float opacity = 1.0f);
     // Soft drop shadow around a rounded rectangle.
     void drawShadow(Rect r, float radius, float blur, Color c);
+    // Makes a rounded rectangle transparent (anti-aliased edges).
+    void eraseRoundRect(Rect r, float radius);
 
     void blend(int x, int y, Color c, float coverage);
 

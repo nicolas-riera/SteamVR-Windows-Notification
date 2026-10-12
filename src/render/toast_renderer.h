@@ -1,7 +1,9 @@
 #pragma once
 // Paints a toast like Windows 11's notification banner: header with the app
 // icon and name, optional hero image, "photo" (app logo override), title and
-// body, progress bars, inline image, inputs and buttons, on Mica.
+// body, progress bars, inline image, inputs and buttons, on a translucent
+// Mica-like background (the VR scene shows through, as the wallpaper does
+// through Mica).
 #include <string>
 
 #include "gfx/canvas.h"
@@ -9,7 +11,6 @@
 #include "notify/toast.h"
 
 class FontSet;
-class Mica;
 
 struct ToastVisual {
     Toast toast;
@@ -20,7 +21,6 @@ struct ToastVisual {
 struct Theme {
     bool light = false;
     Color tint, text, text2, stroke, control, controlStroke, accent, track;
-    float tintOpacity = 0.8f;
     static Theme make(bool light, uint32_t accentRgb);
 };
 
@@ -34,14 +34,13 @@ public:
     static int heroMaxPx(float scale) { return int((kWidth - 32) * scale); }
     static int iconPx(float scale) { return int(16 * scale); }
 
-    ToastRenderer(FontSet& fonts, Mica& mica) : fonts_(fonts), mica_(mica) {}
+    explicit ToastRenderer(FontSet& fonts) : fonts_(fonts) {}
     // Renders into `out` (resized). The panel occupies the canvas minus
     // kShadowPad * scale on each side.
-    void render(const ToastVisual& v, const Theme& theme, float scale, bool mica, Canvas& out);
+    // `opacity`: background opacity (1 = opaque).
+    void render(const ToastVisual& v, const Theme& theme, float scale, float opacity, Canvas& out);
 
 private:
     float layout(const ToastVisual& v, Canvas* c, const Theme& th, float s, float originX, float originY);
     FontSet& fonts_;
-    Mica& mica_;
-    Image backdrop_;
 };

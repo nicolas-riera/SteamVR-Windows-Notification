@@ -88,36 +88,44 @@ bool WpnStore::changed() {
 }
 
 std::vector<ToastRow> WpnStore::fetchNew() {
+    // [Order] is a plain rowid: SQLite reuses the values of deleted rows (e.g.
+    // after the notification center is cleared), so it is not monotonic. A
+    // row is new when its (Order, Id) pair was not there at the previous scan.
+    std::set<std::pair<int64_t, int64_t>> current;
+    {
+        Stmt st{prepare("SELECT [Order], Id FROM Notification WHERE Type = 'toast'")};
+        if (!st) return {};
+        while (sqlite3_step(st) == SQLITE_ROW) current.emplace(sqlite3_column_int64(st, 0), sqlite3_column_int64(st, 1));
+    }
     std::vector<ToastRow> rows;
-    if (lastOrder_ < 0) {
-        Stmt st{prepare("SELECT IFNULL(MAX([Order]), 0) FROM Notification")};
-        if (st && sqlite3_step(st) == SQLITE_ROW) lastOrder_ = sqlite3_column_int64(st, 0);
-        return rows;
+    if (scanned_) {
+        Stmt st{prepare("SELECT n.[Order], n.Id, h.PrimaryId, n.Payload, n.Tag, n.[Group] FROM Notification n "
+                        "JOIN NotificationHandler h ON h.RecordId = n.HandlerId WHERE n.[Order] = ?")};
+        for (const auto& key : current) {
+            if (!st || known_.count(key)) continue;
+            sqlite3_reset(st);
+            sqlite3_bind_int64(st, 1, key.first);
+            if (sqlite3_step(st) != SQLITE_ROW) continue;
+            ToastRow r;
+            r.order = sqlite3_column_int64(st, 0);
+            r.id = sqlite3_column_int64(st, 1);
+            r.aumid = column(st, 2);
+            r.payload = column(st, 3);
+            r.tag = column(st, 4);
+            r.group = column(st, 5);
+            rows.push_back(std::move(r));
+        }
+        // Arrival order (ids come from an increasing counter).
+        std::sort(rows.begin(), rows.end(), [](const ToastRow& a, const ToastRow& b) { return a.id < b.id; });
     }
-    Stmt st{prepare("SELECT n.[Order], n.Id, h.PrimaryId, n.Payload, n.Tag, n.[Group] FROM Notification n "
-                    "JOIN NotificationHandler h ON h.RecordId = n.HandlerId "
-                    "WHERE n.Type = 'toast' AND n.[Order] > ? ORDER BY n.[Order]")};
-    if (!st) return rows;
-    sqlite3_bind_int64(st, 1, lastOrder_);
-    while (sqlite3_step(st) == SQLITE_ROW) {
-        ToastRow r;
-        r.order = sqlite3_column_int64(st, 0);
-        r.id = sqlite3_column_int64(st, 1);
-        r.aumid = column(st, 2);
-        r.payload = column(st, 3);
-        r.tag = column(st, 4);
-        r.group = column(st, 5);
-        lastOrder_ = std::max(lastOrder_, r.order);
-        rows.push_back(std::move(r));
-    }
+    known_ = std::move(current);
+    scanned_ = true; // the first scan only records what is already there
     return rows;
 }
 
 std::set<int64_t> WpnStore::toastIds() {
     std::set<int64_t> ids;
-    Stmt st{prepare("SELECT Id FROM Notification WHERE Type = 'toast'")};
-    if (!st) return ids;
-    while (sqlite3_step(st) == SQLITE_ROW) ids.insert(sqlite3_column_int64(st, 0));
+    for (const auto& key : known_) ids.insert(key.second);
     return ids;
 }
 

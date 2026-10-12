@@ -17,13 +17,17 @@ struct Settings {
 
     // Look.
     std::string theme = "auto"; // auto (follows Windows) | dark | light
-    bool mica = true;           // wallpaper-tinted background, like Windows 11
+    float opacity = 0.8f;       // background opacity: Mica's tint opacity, the scene shows through
     float renderScale = 2.0f;   // texture pixels per Windows pixel
 
     // Behaviour.
     bool respectDoNotDisturb = true;
     float shortDuration = 0;    // s; 0 = Windows' "dismiss notifications after" setting
     float longDuration = 25.0f; // s, toasts sent with duration="long"
+    // Reminders / alarms / calls stay on Windows until acted upon. Closing their
+    // banner (X) is invisible to other apps, so by default they last
+    // longDuration in VR; true keeps them until removed from Windows.
+    bool keepReminders = false;
     std::vector<std::string> excludedApps; // AppUserModelIDs, or parts of them
 
     bool load(const std::wstring& path);

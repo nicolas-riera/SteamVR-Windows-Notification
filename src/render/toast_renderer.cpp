@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "gfx/font.h"
-#include "render/mica.h"
 
 namespace {
 
@@ -89,8 +88,7 @@ Theme Theme::make(bool light, uint32_t accentRgb) {
     t.light = light;
     Color accent = rgba(accentRgb);
     if (light) {
-        t.tint = rgb(243, 243, 243);
-        t.tintOpacity = 0.5f;
+        t.tint = rgb(243, 243, 243); // Mica light
         t.text = rgb(0, 0, 0, 228);
         t.text2 = rgb(0, 0, 0, 155);
         t.stroke = rgb(0, 0, 0, 26);
@@ -99,8 +97,7 @@ Theme Theme::make(bool light, uint32_t accentRgb) {
         t.accent = mix(accent, rgb(0, 0, 0), 0.2f);
         t.track = rgb(0, 0, 0, 60);
     } else {
-        t.tint = rgb(44, 44, 44);
-        t.tintOpacity = 0.8f;
+        t.tint = rgb(32, 32, 32); // Mica dark
         t.text = rgb(255, 255, 255);
         t.text2 = rgb(255, 255, 255, 200);
         t.stroke = rgb(255, 255, 255, 22);
@@ -245,7 +242,7 @@ float ToastRenderer::layout(const ToastVisual& v, Canvas* c, const Theme& th, fl
     return y + kPad;
 }
 
-void ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, bool mica, Canvas& out) {
+void ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, float opacity, Canvas& out) {
     const float pad = kShadowPad * s;
     const float h = layout(v, nullptr, th, s, 0, 0);
     const int cw = int(std::ceil(kWidth * s + 2 * pad)), ch = int(std::ceil(h * s + 2 * pad));
@@ -257,10 +254,11 @@ void ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, bool 
     // Soft shadow, slightly lower than the panel (light from above).
     Rect shadow = panel;
     shadow.y += 4 * s;
-    out.drawShadow(shadow, radius, 16 * s, rgb(0, 0, 0, th.light ? 60 : 110));
+    out.drawShadow(shadow, radius, 16 * s, rgb(0, 0, 0, th.light ? 50 : 90));
+    out.eraseRoundRect(panel, radius); // the panel is translucent: no shadow under it
 
-    mica_.render(int(panel.w), int(panel.h), th.tint, th.tintOpacity, mica, backdrop_);
-    out.drawImage(backdrop_, panel, radius);
+    // Mica: the Windows 11 tint at its tint opacity over what is behind.
+    out.fillRoundRect(panel, radius, withAlpha(th.tint, uint8_t(std::lround(opacity * 255))));
     out.strokeRoundRect(panel, radius, std::max(1.0f, s), th.stroke);
     layout(v, &out, th, s, panel.x, panel.y);
 }

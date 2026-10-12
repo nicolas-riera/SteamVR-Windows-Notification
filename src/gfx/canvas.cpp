@@ -199,3 +199,14 @@ void Canvas::drawShadow(Rect r, float radius, float blur, Color c) {
             if (f > 0.002f) blend(x, y, c, f);
         }
 }
+
+void Canvas::eraseRoundRect(Rect r, float radius) {
+    int x0 = std::max(0, int(std::floor(r.x))), y0 = std::max(0, int(std::floor(r.y)));
+    int x1 = std::min(w_, int(std::ceil(r.right()))), y1 = std::min(h_, int(std::ceil(r.bottom())));
+    for (int y = y0; y < y1; ++y)
+        for (int x = x0; x < x1; ++x) {
+            float cov = std::clamp(0.5f - roundRectDist(x + 0.5f, y + 0.5f, r, radius), 0.0f, 1.0f);
+            uint8_t* p = &px_[(size_t(y) * size_t(w_) + size_t(x)) * 4];
+            p[3] = uint8_t(p[3] * (1.0f - cov) + 0.5f);
+        }
+}

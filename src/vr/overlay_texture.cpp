@@ -107,3 +107,9 @@ void OverlayTexture::upload(vr::VROverlayHandle_t overlay, const Canvas& c) {
     if (e != vr::VROverlayError_None) LOG("d3d11: SetOverlayTexture: %s", vr::VROverlay()->GetOverlayErrorNameFromEnum(e));
     if (retireAfter_ > 0 && --retireAfter_ == 0) releaseTex(retired_);
 }
+
+void OverlayTexture::releaseDevice() {
+    if (g_context) { g_context->ClearState(); g_context->Flush(); g_context->Release(); g_context = nullptr; }
+    if (g_device) { g_device->Release(); g_device = nullptr; }
+    g_tried = false;
+}

@@ -16,6 +16,9 @@ public:
     OverlayTexture& operator=(const OverlayTexture&) = delete;
 
     void upload(vr::VROverlayHandle_t overlay, const Canvas& canvas);
+    // Frees the shared D3D11 device (recreated on the next upload). Every
+    // OverlayTexture must have been destroyed.
+    static void releaseDevice();
 
 private:
     bool ensure(int w, int h);
