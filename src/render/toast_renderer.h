@@ -18,6 +18,7 @@ struct ToastVisual {
     Toast toast;
     std::string appName;
     Image appIcon, logo, hero, inlineImage; // already decoded (may be empty)
+    std::string footer;                     // hint shown under the content ("" = none)
 };
 
 struct Theme {

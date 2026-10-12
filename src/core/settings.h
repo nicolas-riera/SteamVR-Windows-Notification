@@ -17,6 +17,7 @@ struct Settings {
 
     // Look.
     std::string theme = "auto"; // auto (follows Windows) | dark | light
+    std::string language = "auto"; // auto (follows Windows) | en | fr
     bool mica = true;           // Mica background made from the VR scene behind (false: plain translucent tint)
     float renderScale = 2.0f;   // texture pixels per Windows pixel
 

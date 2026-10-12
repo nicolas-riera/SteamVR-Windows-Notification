@@ -29,6 +29,9 @@ constexpr float kUndockAngle = 45.0f;   // and detaches past this
 constexpr double kMicaInterval = 0.2;   // s, between two looks at the scene behind
 constexpr float kMicaBlend = 0.45f;     // share of a new look in the Mica colors (smooths changes)
 constexpr float kFallbackOpacity = 0.85f; // background without Mica
+constexpr double kMinShown = 1.2;      // s, least time a notification hidden by its app stays up (as on Windows)
+constexpr int64_t kExpirySlack = 20000000; // 2 s in FILETIME units: removed this close to its expiry = expired
+constexpr double kBannerExtra = 1.0;   // s, Windows keeps a banner ~1 s longer than its setting (measured)
 constexpr size_t kMaxNormalQueue = 20;
 constexpr double kTrimAfter = 30.0;     // s without notifications before freeing the GPU device
 constexpr int kMaxPriority = 3;
@@ -94,7 +97,7 @@ double Presenter::duration(const Toast& t) const {
                       t.hasActions;
     if (persistent && settings_.keepReminders) return kForever;
     if (t.longDuration || persistent) return settings_.longDuration;
-    return settings_.shortDuration > 0 ? settings_.shortDuration : sys::messageDuration();
+    return settings_.shortDuration > 0 ? settings_.shortDuration : sys::messageDuration() + kBannerExtra;
 }
 
 void Presenter::syncDatabase(double now) {
@@ -109,6 +112,7 @@ void Presenter::syncDatabase(double now) {
         t.aumid = row.aumid;
         t.tag = row.tag;
         t.group = row.group;
+        t.expiry = row.expiry;
 
         // Replacement of a toast we know (same id, or same app + tag + group).
         Entry* same = nullptr;
@@ -142,17 +146,29 @@ void Presenter::syncDatabase(double now) {
         e->visual.appName = app.name;
         e->visual.appIcon = app.icon;
         loadImages(*e);
-        LOG("toast %lld from %s: \"%s\"%s", (long long)e->toast.id, e->toast.aumid.c_str(), e->toast.title.c_str(),
-            e->priority ? " (priority)" : "");
+        LOG("toast %lld from %s: \"%s\"%s, expires in %.0f s", (long long)e->toast.id, e->toast.aumid.c_str(), e->toast.title.c_str(),
+            e->priority ? " (priority)" : "", double(row.expiry - row.arrival) / 1e7);
         entries_.push_back(std::move(e));
     }
 
-    // Dismissed in Windows: gone from the database.
+    // Gone from the database. Measured on the desktop:
+    //  - expired: Windows still shows its banner (even when it was queued);
+    //  - removed (by you, or hidden by its app): a queued banner is skipped,
+    //    a shown one leaves, but only after being up for a moment.
     std::set<int64_t> ids = store_.toastIds();
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    const int64_t nowFt = (int64_t(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
     for (auto& e : entries_) {
-        if (e->state == State::Leaving || ids.count(e->toast.id)) continue;
+        if (e->state == State::Leaving || e->removed || ids.count(e->toast.id)) continue;
+        e->removed = true;
+        if (e->toast.expiry > 0 && nowFt >= e->toast.expiry - kExpirySlack) {
+            LOG("toast %lld: expired in Windows, banner kept", (long long)e->toast.id);
+            continue;
+        }
         LOG("toast %lld: removed from Windows", (long long)e->toast.id);
-        leave(*e, now);
+        if (e->state == State::Showing) e->expiresAt = std::min(e->expiresAt, std::max(now, e->shownAt + kMinShown));
+        else leave(*e, now);
     }
 
     // Progress bars and other {bindings} updated by the app.
@@ -162,6 +178,7 @@ void Presenter::syncDatabase(double now) {
         if (!parseToast(e->payload, store_.data(e->toast.id), t)) continue;
         if (t.sameContent(e->toast)) continue;
         t.id = e->toast.id; t.order = e->toast.order; t.aumid = e->toast.aumid; t.tag = e->toast.tag; t.group = e->toast.group;
+        t.expiry = e->toast.expiry;
         e->toast = std::move(t);
         e->dirty = true;
     }
@@ -204,6 +221,7 @@ void Presenter::render(Entry& e) {
     bool light = settings_.theme == "light" || (settings_.theme == "auto" && sys::lightTheme());
     e.theme = Theme::make(light, sys::accentColor());
     e.visual.toast = e.toast;
+    e.visual.footer = footerText();
     e.panelH = renderer_.render(e.visual, e.theme, settings_.renderScale, e.canvas);
     if (e.overlay) e.overlay->upload(e.canvas);
     e.heightM = e.panelH * settings_.width / ToastRenderer::kWidth;
@@ -554,4 +572,12 @@ void Presenter::tick(double now) {
     idleSince_ = -1;
     trimmed_ = false;
     place(now, dt);
+}
+
+// English first; French when chosen, or when Windows is in French.
+std::string Presenter::footerText() const {
+    bool french = settings_.language == "fr" ||
+                  (settings_.language == "auto" && PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_FRENCH);
+    return french ? "Ouvrez la Vue Bureau pour interagir avec la notification"
+                  : "Open the Desktop view to interact with the notification";
 }

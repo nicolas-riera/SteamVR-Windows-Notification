@@ -24,6 +24,7 @@ struct Toast {
     int64_t order = 0; // grows on every insert or replacement
     std::string aumid; // application user model id (handler)
     std::string tag, group;
+    int64_t expiry = 0; // FILETIME; Windows deletes the toast then, but keeps its banner
 
     // Content.
     Scenario scenario = Scenario::Default;

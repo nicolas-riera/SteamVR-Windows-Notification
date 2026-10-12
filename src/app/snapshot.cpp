@@ -150,7 +150,10 @@ int runSnapshot(const std::wstring& outDir) {
         for (bool light : {false, true}) {
             Theme th = Theme::make(light, accent);
             Canvas content, out;
-            float h = renderer.render(v, th, s, content);
+            ToastVisual sample = v;
+            sample.footer = light ? "Ouvrez la Vue Bureau pour interagir avec la notification"
+                                  : "Open the Desktop view to interact with the notification";
+            float h = renderer.render(sample, th, s, content);
             // Backdrop at full size here, then the content over it.
             renderer.renderBackdrop(&field, th, h, s, content.width(), content.height(), 0.85f, out);
             for (int y = 0; y < content.height(); ++y)

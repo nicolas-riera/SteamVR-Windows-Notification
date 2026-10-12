@@ -254,7 +254,18 @@ float ToastRenderer::layout(const ToastVisual& v, Canvas* c, const Theme& th, fl
         }
         y += kControlH;
     }
-    return y + kPad;
+    if (v.footer.empty()) return y + kPad;
+
+    // Footer, as on Windows Mixed Reality: where to go to act on it.
+    y += kPad;
+    if (c) c->fillRect({X(0), Y(y), W * s, std::max(1.0f, s)}, withAlpha(th.text, 28));
+    y += 1;
+    const float rowH = 34;
+    if (c) {
+        f.drawIcon(*c, X(kPad + 7), Y(y + rowH * 0.5f), 0xE7F4, 12 * s, th.text2); // monitor
+        text(kPad + 22, y, rowH, f.ellipsize(v.footer, kSmallPx * s, (W - kPad * 2 - 22) * s), kSmallPx, th.text2, FontStyle::Regular);
+    }
+    return y + rowH;
 }
 
 float ToastRenderer::render(const ToastVisual& v, const Theme& th, float s, Canvas& out) {

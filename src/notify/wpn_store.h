@@ -17,6 +17,7 @@ struct sqlite3_stmt;
 struct ToastRow {
     int64_t id = 0, order = 0;
     std::string aumid, payload, tag, group;
+    int64_t arrival = 0, expiry = 0; // FILETIME (100 ns since 1601, UTC)
 };
 
 class WpnStore {

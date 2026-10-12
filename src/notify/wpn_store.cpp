@@ -99,7 +99,7 @@ std::vector<ToastRow> WpnStore::fetchNew() {
     }
     std::vector<ToastRow> rows;
     if (scanned_) {
-        Stmt st{prepare("SELECT n.[Order], n.Id, h.PrimaryId, n.Payload, n.Tag, n.[Group] FROM Notification n "
+        Stmt st{prepare("SELECT n.[Order], n.Id, h.PrimaryId, n.Payload, n.Tag, n.[Group], n.ArrivalTime, n.ExpiryTime FROM Notification n "
                         "JOIN NotificationHandler h ON h.RecordId = n.HandlerId WHERE n.[Order] = ?")};
         for (const auto& key : current) {
             if (!st || known_.count(key)) continue;
@@ -113,6 +113,8 @@ std::vector<ToastRow> WpnStore::fetchNew() {
             r.payload = column(st, 3);
             r.tag = column(st, 4);
             r.group = column(st, 5);
+            r.arrival = sqlite3_column_int64(st, 6);
+            r.expiry = sqlite3_column_int64(st, 7);
             rows.push_back(std::move(r));
         }
         // Arrival order (ids come from an increasing counter).

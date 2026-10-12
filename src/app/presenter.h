@@ -56,6 +56,7 @@ private:
         State state = State::Waiting;
         bool priority = false;
         bool imagesPending = false;
+        bool removed = false; // no longer in the Windows database
         bool dirty = true; // needs a redraw
         double arrived = 0, shownAt = 0, expiresAt = 0, leaveAt = 0;
         std::unique_ptr<ToastOverlay> overlay;  // content
@@ -79,6 +80,7 @@ private:
     void leave(Entry& e, double now);
     void render(Entry& e);
     void renderBackdrop(Entry& e);
+    std::string footerText() const;
     void lifecycle(double now);
     void pollDesktopTab(double now);
     bool headPose(Mat34& head);
