@@ -22,7 +22,8 @@ constexpr float kGroupFadeTime = 0.22f; // s, fade when the SteamVR menu hides /
 constexpr float kStackTime = 0.22f;     // s, stack re-layout glide
 constexpr float kStackGap = 0.012f;     // m, between stacked notifications
 constexpr float kDockGap = 0.03f;       // m, between the menu bar and a docked notification
-constexpr float kDockLift = 0.015f;     // m, in front of the menu, so it is never behind it
+constexpr float kDockLift = 0.03f;      // m, in front of the menu, so it is never behind it
+constexpr float kDockTilt = 25.0f;     // degrees, docked ones lean back towards you (the menu window is curved)
 constexpr float kDockAngle = 30.0f;     // degrees: docks when you face the menu within this
 constexpr float kUndockAngle = 45.0f;   // and detaches past this
 constexpr double kMicaInterval = 0.2;   // s, between two looks at the scene behind
@@ -226,10 +227,10 @@ void Presenter::show(Entry& e, double now) {
     if (!e.overlay->create(key, 200)) e.overlay.reset();
     render(e);
     e.state = State::Showing;
-    e.shownAt = now;
-    e.expiresAt = now + duration(e.toast);
+    e.shownAt = std::max(now, util::now()); // after the render: its time is not taken from the display
+    e.expiresAt = e.shownAt + duration(e.toast);
     e.micaDue = 0; // looks at the scene before its first frame
-    LOG("toast %lld: shown for %.1f s", (long long)e.toast.id, e.expiresAt - now);
+    LOG("toast %lld: shown for %.1f s", (long long)e.toast.id, e.expiresAt - e.shownAt);
 }
 
 void Presenter::leave(Entry& e, double now) {
@@ -253,7 +254,9 @@ void Presenter::lifecycle(double now) {
     for (auto& e : entries_) {
         if (e->state == State::Showing && now >= e->expiresAt) leave(*e, now);
         if (e->state == State::Waiting && (!e->imagesPending || now - e->arrived > kImageWait)) e->state = State::Queued;
-        if (e->state == State::Showing) ++(e->priority ? priorityShown : normalShown);
+        // A leaving one keeps its place until faded out: the next waits for it.
+        bool occupies = e->state == State::Showing || (e->state == State::Leaving && e->leaveAt > -kForever);
+        if (occupies) ++(e->priority ? priorityShown : normalShown);
     }
     // Finished leaving.
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
@@ -480,7 +483,12 @@ void Presenter::place(double now, float dt) {
     }
     Vec3 x = upRef.cross(z);
     x = x.length() < 1e-3f ? Vec3{1, 0, 0} : x.normalized();
-    const Mat34 group = basis(x, z.cross(x), z, pos_);
+    const Mat34 upright = basis(x, z.cross(x), z, pos_);
+    // Docked, the stack leans back towards you around the newest one's bottom
+    // edge, so tall notifications clear the curved menu window.
+    if (newest) anchorH_ = newest->heightM;
+    const Vec3 pivot = pos_ - axis(upright, 1) * (anchorH_ * 0.5f);
+    const Mat34 group = upright * Mat34::rotationX(rad(kDockTilt) * k);
     const Vec3 up = axis(group, 1);
 
     // Stack: newest at the bottom (on the anchor), older ones above.
@@ -508,7 +516,7 @@ void Presenter::place(double now, float dt) {
         float alpha = easeInOutCubic(std::clamp(float((now - e->shownAt) / kEnterTime), 0.0f, 1.0f));
         if (e->state == State::Leaving) alpha *= 1 - easeInOutCubic(std::clamp(float((now - e->leaveAt) / kLeaveTime), 0.0f, 1.0f));
         animating |= now - e->shownAt < kEnterTime || e->state == State::Leaving;
-        Vec3 p = pos_ + up * e->y;
+        Vec3 p = pivot + up * (anchorH_ * 0.5f + e->y);
         Mat34 pose = group;
         pose.m[0][3] = p.x; pose.m[1][3] = p.y; pose.m[2][3] = p.z;
         if (alpha * ga > 0.004f) updateMica(*e, pose, head, now);

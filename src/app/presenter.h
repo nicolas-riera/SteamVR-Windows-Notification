@@ -119,4 +119,5 @@ private:
     bool haveBar_ = false;
     Vec3 barX_, barY_, barZ_; // orientation of the bar (docked notifications use it)
     float dockBlend_ = 0, dockBlendVel_ = 0;
+    float anchorH_ = 0; // height of the newest notification (the stack's base)
 };
