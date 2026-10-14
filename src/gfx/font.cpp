@@ -34,6 +34,17 @@ uint32_t nextCodepoint(std::string_view s, size_t& i) {
     return cp;
 }
 
+namespace {
+// Format characters Windows never draws (some fallback fonts have visible
+// glyphs for them, like a dashed "FSI" box): bidi marks and isolates, which
+// Discord puts around names, zero-width spaces and joiners, variation
+// selectors, soft hyphen, BOM, tags.
+bool invisible(uint32_t cp) {
+    return cp == 0x00AD || cp == 0x061C || cp == 0x180E || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) ||
+           (cp >= 0x2060 && cp <= 0x206F) || (cp >= 0xFE00 && cp <= 0xFE0F) || cp == 0xFEFF || (cp >= 0xE0000 && cp <= 0xE01EF);
+}
+} // namespace
+
 FontSet::FontSet() = default;
 FontSet::~FontSet() = default;
 
@@ -114,7 +125,9 @@ float FontSet::measure(std::string_view text, float px, FontStyle st) {
     float w = 0;
     for (size_t i = 0; i < s.size();) {
         int face;
-        int gi = findGlyph(nextCodepoint(s, i), st, face);
+        const uint32_t cp = nextCodepoint(s, i);
+        if (invisible(cp)) continue;
+        int gi = findGlyph(cp, st, face);
         w += glyph(face, gi, px).advance;
     }
     return w;
@@ -127,7 +140,9 @@ float FontSet::draw(Canvas& c, float x, float baseline, std::string_view text, f
     int by = int(std::lround(baseline));
     for (size_t i = 0; i < s.size();) {
         int face;
-        int gi = findGlyph(nextCodepoint(s, i), st, face);
+        const uint32_t cp = nextCodepoint(s, i);
+        if (invisible(cp)) continue;
+        int gi = findGlyph(cp, st, face);
         const Glyph& g = glyph(face, gi, px);
         if (!g.bmp.empty()) c.drawMask(int(std::lround(pen)) + g.x0, by + g.y0, g.bmp.data(), g.w, g.h, col);
         pen += g.advance;
@@ -144,7 +159,9 @@ std::string FontSet::ellipsize(std::string_view s, float px, float maxW, FontSty
     for (size_t i = 0; i < s.size();) {
         size_t start = i;
         int face;
-        int gi = findGlyph(nextCodepoint(s, i), st, face);
+        const uint32_t cp = nextCodepoint(s, i);
+        if (invisible(cp)) continue;
+        int gi = findGlyph(cp, st, face);
         w += glyph(face, gi, px).advance;
         if (w > budget) break;
         cut = i;
